@@ -59,12 +59,66 @@ class GraphDBConnection:
         self._user = os.getenv("GRAPHDB_USER", "")
         self._password = os.getenv("GRAPHDB_PASSWORD", "")
 
+        # ---- Dynamic Repository Discovery (Self-Healing Connection) ----
+        import urllib.request
+        import json
+        import logging
+
+        logger = logging.getLogger("knowledge_base.connection")
+        discovered_repos = []
+
+        try:
+            # Query the local GraphDB REST API for active repositories
+            req = urllib.request.Request(
+                f"{graphdb_url}/repositories",
+                headers={"Accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                for binding in res_data.get("results", {}).get("bindings", []):
+                    r_id = binding.get("id", {}).get("value")
+                    if r_id:
+                        discovered_repos.append(r_id)
+        except Exception as err:
+            logger.debug("GraphDB repository auto-discovery bypassed or offline: %s", err)
+
+        if discovered_repos:
+            if graphdb_repo in discovered_repos:
+                # Configured repository exists, use it
+                pass
+            else:
+                # Configured repository doesn't exist on this server!
+                # Let's search for a repository that matches our project keywords.
+                matched_repo = None
+                keywords = ["twin", "digital", "supply", "chain", "semantic", "project"]
+                for repo in discovered_repos:
+                    if any(kw in repo.lower() for kw in keywords):
+                        matched_repo = repo
+                        break
+                
+                if matched_repo:
+                    logger.warning(
+                        "Configured GraphDB repository '%s' not found. "
+                        "Auto-discovered and dynamically switched to: '%s'",
+                        graphdb_repo, matched_repo
+                    )
+                    graphdb_repo = matched_repo
+                else:
+                    # Switch to the first available repository as a fallback
+                    logger.warning(
+                        "Configured GraphDB repository '%s' not found. "
+                        "Falling back to first available repository on server: '%s'",
+                        graphdb_repo, discovered_repos[0]
+                    )
+                    graphdb_repo = discovered_repos[0]
+
         # ---- Endpoint URLs ----
         # GraphDB exposes two endpoints per repository:
         #   /repositories/{repo}          → for SELECT / ASK queries
         #   /repositories/{repo}/statements → for INSERT / DELETE updates
         self._query_endpoint = f"{graphdb_url}/repositories/{graphdb_repo}"
         self._update_endpoint = f"{graphdb_url}/repositories/{graphdb_repo}/statements"
+
 
     # ----------------------------------------------------------
     # _get_sparql_wrapper() — build a fresh wrapper per request

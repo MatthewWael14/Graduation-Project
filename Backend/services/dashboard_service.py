@@ -60,8 +60,9 @@ def get_fallback_options(material_id: str) -> list[dict]:
     SELECT DISTINCT ?supplier ?supplierName ?reliabilityScore
     WHERE {{
         ?supplier rdf:type :Supplier ;
-                  rdfs:label ?supplierName ;
                   :supplies :{safe_material} .
+        OPTIONAL {{ ?supplier rdfs:label ?label . }}
+        BIND(COALESCE(?label, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
     }}
     ORDER BY DESC(?reliabilityScore)
