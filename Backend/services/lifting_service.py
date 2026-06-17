@@ -212,7 +212,8 @@ INSERT DATA {{
 
         # ── Supplier ──
         :{supplier_uri}  rdf:type       :Supplier ;
-                         rdfs:label     "{_escape_sparql_literal(data.supplier_name)}" .
+                         rdfs:label     "{_escape_sparql_literal(data.supplier_name)}" ;
+                         :hasReliabilityScore  "0.5"^^xsd:float .
 
         # ── Raw Material ──
         :{material_uri}  rdf:type       :RawMaterial ;

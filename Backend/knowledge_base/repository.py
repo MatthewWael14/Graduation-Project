@@ -106,7 +106,8 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
             # ── Supplier individual ──
             :{supplier_uri}  rdf:type       :Supplier ;
-                             rdfs:label     "{safe_supplier_name}" .
+                             rdfs:label     "{safe_supplier_name}" ;
+                             :hasReliabilityScore  "0.5"^^xsd:float .
 
             # ── RawMaterial individual ──
             :{material_uri}  rdf:type       :RawMaterial ;
