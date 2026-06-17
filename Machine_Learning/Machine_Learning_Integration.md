@@ -229,3 +229,29 @@ for _, row in supplier_stats.iterrows():
     supplier_uri = f"Supplier_{str(row['Supplier ID']).replace('-', '_')}"
     update_supplier_reliability_score(supplier_uri, float(row['reliability_score']))
 ```
+
+---
+
+## 7. Dual-Model Architecture: Procurement vs. Logistics Delay Prediction
+
+To construct a complete end-to-end supply chain risk management system, the Semantic Digital Twin employs two distinct ML models operating at different stages of the purchase order lifecycle:
+
+### Phase 1: Contract Planning (Before Shipment Starts)
+* **When:** You are placing a new purchase order with a supplier. The goods are not yet manufactured, and the shipping truck is not moving.
+* **The Problem:** You have no live IoT data (no GPS, no vehicle speed, no current weather for next week).
+* **The Model:** You run the **Procurement Model (Static)**.
+* **The Purpose:** It looks at contract details (price, order quantity, payment terms, supplier tier, ESG score) and predicts: *"Historically, orders structured like this with this type of supplier have a 30% risk of delay."*
+* **The Benefit:** It acts as a preventative decision-support tool. It informs the user if a proposed contract is high-risk and helps managers decide whether to allocate a backup supplier before any money or time is spent.
+
+### Phase 2: In-Transit Tracking (Active Delivery)
+* **When:** The goods are shipped, and a truck is driving on the highway.
+* **The Problem:** The contract terms no longer matter—what matters is the physical road.
+* **The Model:** You run the **Logistics Model (Dynamic)**.
+* **The Purpose:** It looks at live IoT sensor streams (GPS coordinates, vehicle speed, current traffic congestion, weather severity) and predicts: *"The truck has stopped (speed = 0) in a heavy storm. Based on this, there is a 90% probability of a 24-hour delay."*
+* **The Benefit:** It triggers real-time alerts to the production line so they can prepare for an immediate disruption.
+
+### Summary
+* **Without the Procurement Model:** You cannot predict risks when planning or placing orders.
+* **Without the Logistics Model:** You cannot predict delays caused by real-world events while goods are moving.
+* **Together:** They form a complete end-to-end risk management system: **Planning Risk Assessment $\rightarrow$ Live In-Transit Tracking**.
+

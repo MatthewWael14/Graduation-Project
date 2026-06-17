@@ -19,11 +19,13 @@ import logging
 import pdfplumber
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from models.schemas import ConfirmedSLA, IoTTelemetryEvent, ManagerAlert, SLAContract
+from models.schemas import ConfirmedSLA, IoTTelemetryEvent, ManagerAlert, SLAContract, OrderRiskPredictionRequest, OrderRiskPredictionResponse
 from services.dashboard_service import get_impacted_products
 from services.lifting_service import persist_confirmed_sla, save_sla_contract, to_sla_contract
 from services.llm_service import run_extraction_pipeline
 from services.risk_engine_service import process_iot_event
+
+from services.order_risk_service import predict_order_risk
 
 logger = logging.getLogger(__name__)
 
@@ -215,3 +217,61 @@ async def simulate_iot_event(event: IoTTelemetryEvent):
         )
 
     return alert
+
+
+
+@router.post("/predict-order-risk", response_model=OrderRiskPredictionResponse)
+async def predict_order_planning_risk(request: OrderRiskPredictionRequest):
+    """
+    Evaluates risk of a proposed purchase order before placing it using the static ML model.
+    """
+    logger.info("Evaluating order planning risk for supplier: %s, material: %s", request.supplier_id, request.material_id)
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, predict_order_risk, request)
+        return result
+    except Exception as exc:
+        logger.error("Order risk assessment crashed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Order risk evaluation failed: {exc}",
+        )
+
+
+@router.post("/place-order")
+async def place_purchase_order(request: OrderRiskPredictionRequest):
+    """
+    Submits a new Purchase Order transaction:
+      1. Saves the PO & Delivery individuals in GraphDB.
+      2. Appends the order row as a new on-time transaction in the historical CSV dataset.
+      3. Re-evaluates and updates all supplier scores.
+    """
+    logger.info("Placing new purchase order with supplier: %s, material: %s", request.supplier_id, request.material_id)
+    try:
+        from services.supplier_evaluator_service import record_placed_order_and_update_score
+        loop = asyncio.get_running_loop()
+        delivery_id = await loop.run_in_executor(
+            None,
+            record_placed_order_and_update_score,
+            request.supplier_id,
+            request.material_id,
+            request.quantity,
+            request.unit_price,
+            request.po_date,
+            request.po_type,
+            request.department
+        )
+        if not delivery_id:
+            raise HTTPException(status_code=500, detail="Failed to place order (dataset or context missing).")
+            
+        return {
+            "status": "success",
+            "message": f"Successfully placed order. Generated Delivery ID: {delivery_id}.",
+            "delivery_id": delivery_id
+        }
+    except Exception as exc:
+        logger.error("Order placement failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to place purchase order: {exc}"
+        )
