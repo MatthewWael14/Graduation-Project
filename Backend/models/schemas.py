@@ -347,3 +347,81 @@ class ManagerAlert(BaseModel):
         default=False,
         description="Whether this alert passed the validator agent quality gate",
     )
+
+
+class OrderRiskPredictionRequest(BaseModel):
+    """
+    Schema representing a request to evaluate order delay risk during planning.
+    """
+    supplier_id: str = Field(
+        ...,
+        examples=["Supplier_SUP_001"],
+        description="Unique identifier (URI or ID) of the supplier in GraphDB"
+    )
+    material_id: str = Field(
+        ...,
+        examples=["Material_Steel_Sheet"],
+        description="Unique identifier (URI or ID) of the raw material in GraphDB"
+    )
+    quantity: int = Field(
+        ...,
+        ge=1,
+        examples=[500],
+        description="Proposed order quantity"
+    )
+    unit_price: float = Field(
+        ...,
+        ge=0.0,
+        examples=[6.55],
+        description="Proposed unit price"
+    )
+    po_date: str = Field(
+        ...,
+        examples=["2026-03-05"],
+        description="Proposed purchase order date (YYYY-MM-DD)"
+    )
+    po_type: str = Field(
+        default="Standard",
+        examples=["Standard", "Emergency"],
+        description="Type of purchase order (Standard, Emergency, etc.)"
+    )
+    department: str = Field(
+        default="Operations",
+        examples=["Operations", "IT"],
+        description="Department requesting the order"
+    )
+
+
+class OrderRiskPredictionResponse(BaseModel):
+    """
+    Schema representing the risk assessment result for order planning.
+    """
+    status: str = Field(
+        default="success",
+        examples=["success"],
+        description="Evaluation status"
+    )
+    on_time_probability: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        examples=[0.78],
+        description="Model-predicted probability that the order will arrive on time (0.0-1.0)"
+    )
+    risk_level: str = Field(
+        ...,
+        examples=["Low", "High"],
+        description="Calculated risk classification level based on probability threshold"
+    )
+    estimated_delay_hours: int = Field(
+        ...,
+        ge=0,
+        examples=[0, 48],
+        description="Estimated delay duration in hours if flagged as high-risk"
+    )
+    features_used: dict = Field(
+        ...,
+        examples=[{"lead_time_days": 50, "supplier_esg_score": 77.2}],
+        description="Explainability dictionary showing parameters retrieved from GraphDB and derived by feature engineering"
+    )
+

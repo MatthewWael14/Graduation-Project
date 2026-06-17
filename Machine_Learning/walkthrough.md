@@ -1,82 +1,109 @@
-# Walkthrough — Multi-Agent Risk Engine & ML Integration
+# Walkthrough — Supply Chain Model Integrations
 
-We have successfully integrated the Machine Learning delay prediction pipeline with the FastAPI backend and Ontotext GraphDB.
-
----
-
-## 1. Summary of Changes
-
-### Telemetry Logs
-* **Enriched [telemetry_stream_001.json](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Data_Science/data_Lake/iot_streams/telemetry_stream_001.json):** Added a full milestone shipping log sequence for delivery `DEL_005` (representing the critical component shipment) to test multiple delivery profiles alongside `DEL_015`.
-
-### GraphDB Seeding
-* **Seeded Delivery Properties directly in GraphDB:** Removed all mock BIND statements from the SPARQL query and instead inserted all the required ERP properties directly as triples for `:DEL_005` and `:DEL_015` in the active GraphDB instance.
-
-### Machine Learning Component
-* **Completed [delay_predictor_integration.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Machine%20Learning/delay_predictor_integration.py):**
-  * **Direct GraphDB Querying:** Replaced the hardcoded SPARQL BIND defaults with active triple lookups (e.g. `:{delivery_id} :poType ?poType`).
-  * **Removed Static Fallback:** Disabled the local Python dictionary fallback. The system now operates strictly on properties retrieved from GraphDB.
-  * **Automated Trainer:** Scans for missing model serialization assets. If not found, it automatically preprocesses the historical procurement logs, trains a Random Forest Classifier, and exports the model assets.
-  * **Resilient Requests:** Enhanced request timeout parameter to 60 seconds.
+We have successfully tidied the Machine Learning structure and integrated both machine learning engines into our Semantic Digital Twin framework:
+1. **Dynamic Logistics Model (Real-Time Transit Delay Regressor):** Loads dynamic transit sensors (weather severity, traffic congestion, speed, GPS) and GraphDB context to predict exact delay hours.
+2. **Procurement Order Planning Model (Static Purchase Order Classifier):** Evaluates proposed order parameters (quantity, unit price, month, supplier) during creation to assess delay risk before placing a Purchase Order.
 
 ---
 
-## 2. Verification Results
+## 1. Directory Structure
 
-### 1. Ingestion and Classification Log
-Running the simulation script triggers the training process first and then processes the mock stream, pulling properties directly from GraphDB:
+The `Machine_Learning` folder has been reorganized into clean subdirectories to isolate the dynamic logistics model from the legacy static procurement model:
+
+```
+Machine_Learning/
+├── Logistics_Model/
+│   ├── Delay_orediction.ipynb                # Training notebook for logistics regression
+│   ├── delay_predictor_logistics.py          # Training and serialization script
+│   ├── dynamic_supply_chain_logistics_dataset.xlsx # Clean logistics dataset
+│   ├── training_shipments.xlsx               # 80% training partition
+│   ├── evaluation_shipments.xlsx             # 20% unseen evaluation partition
+│   ├── logistics_model.pkl                   # Serialized Linear Regression pipeline
+│   ├── logistics_features.json               # Expected features list
+│   ├── seed_evaluation_context.py            # Seeding script for evaluation data & stream
+│   └── transit_delay_predictor.py            # Real-time telemetry ingestion simulator
+├── Procurement_Model/
+│   ├── Graduation_Project_final.ipynb        # Training notebook for procurement classifier
+│   ├── Supplier_Score.ipynb                  # Supplier scoring notebook
+│   ├── Dataset_Procurement_SelectedFeatures.csv # Selected features procurement dataset
+│   ├── delay_prediction_model.pkl            # Serialized RandomForest classifier
+│   ├── scaler.pkl                            # Serialized StandardScaler
+│   ├── model_features.json                   # List of 109 expected model features
+│   ├── seed_procurement_evaluation.py        # Seeding script for procurement test suppliers
+│   └── procurement_delay_predictor.py        # Legacy simulation and accuracy verification script
+├── Machine_Learning_Integration.md           # Integration architecture guide
+├── implementation_plan.md                    # Implementation plan for Procurement Order Planning
+└── walkthrough.md                            # This walkthrough guide
+```
+
+---
+
+## 2. Dynamic Logistics Model Integration
+
+This model processes dynamic telemetry streams, maps them to the grounded GraphDB supplier contracts, and predicts the precise delay deviation.
+
+### Component Walkthrough
+* **[seed_evaluation_context.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Machine_Learning/Logistics_Model/seed_evaluation_context.py):** Isolated the 20% unseen test partition, picked three representative shipment profiles (nominal, medium delay, severe delay), seeded their attributes into GraphDB, and exported a mock telemetry log `telemetry_stream_logistics.json`.
+* **[transit_delay_predictor.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Machine_Learning/Logistics_Model/transit_delay_predictor.py):** Stream ingestion simulation script. Loads `logistics_model.pkl`, queries Ontotext GraphDB for contract parameters, compiles features, runs inference, and invokes the backend's `/simulate-iot` endpoint for flagged delays.
+
+### Ingestion Ingest Output Logs
+Running the logistics stream simulator processes the anomalies and generates alerts on the backend:
 ```
 ============================================================
-  SIMULATING TELEMETRY STREAM INGESTION
+  RUNNING LOGISTICS STREAM INGESTION SIMULATION
 ============================================================
-[*] Successfully loaded model, scaler, and 114 features.
-[*] Processing 8 telemetry events...
+[*] Successfully loaded Linear Regression pipeline model.
+[*] Model expects 26 features.
+[*] Processing 6 telemetry events...
 
->> Ingested Telemetry for DEL_015 | Status: Scheduled | Weather: Clear
+>> Ingested Telemetry for DEL_EVAL_001 | Status: Scheduled | Weather: Clear
     [+] Telemetry is nominal. No action needed.
 
->> Ingested Telemetry for DEL_015 | Status: Shipped | Weather: Light Rain
+>> Ingested Telemetry for DEL_EVAL_001 | Status: Shipped | Weather: Clear
     [+] Telemetry is nominal. No action needed.
 
->> Ingested Telemetry for DEL_015 | Status: Shipped | Weather: Storm
-    [!] Telemetry anomaly detected (Weather: Storm, Speed: 0.0 km/h, Telemetry Disruption Prob: 0.65). Running ML risk evaluation...
-[+] Loaded context for DEL_015 from live GraphDB.
-    [i] ML Model On-Time Confidence: 68.67%
-    [+] Delivery predicted to arrive on time. No alert triggered.
-
->> Ingested Telemetry for DEL_015 | Status: Shipped | Weather: Storm
-    [!] Telemetry anomaly detected (Weather: Storm, Speed: 0.0 km/h, Telemetry Disruption Prob: 0.98). Running ML risk evaluation...
-[+] Loaded context for DEL_015 from live GraphDB.
-    [i] ML Model On-Time Confidence: 68.67%
-    [+] Delivery predicted to arrive on time. No alert triggered.
-
->> Ingested Telemetry for DEL_005 | Status: Scheduled | Weather: Clear
+>> Ingested Telemetry for DEL_EVAL_002 | Status: Scheduled | Weather: Clear
     [+] Telemetry is nominal. No action needed.
 
->> Ingested Telemetry for DEL_005 | Status: Shipped | Weather: Windy
-    [+] Telemetry is nominal. No action needed.
-
->> Ingested Telemetry for DEL_005 | Status: Shipped | Weather: Heavy Snow
-    [!] Telemetry anomaly detected (Weather: Heavy Snow, Speed: 0.0 km/h, Telemetry Disruption Prob: 0.7). Running ML risk evaluation...
-[+] Loaded context for DEL_005 from live GraphDB.
-    [i] ML Model On-Time Confidence: 59.33%
-    [!] RISK FLAGGED! Delay predicted (Disruption Prob: 0.41). Invoking API...
+>> Ingested Telemetry for DEL_EVAL_002 | Status: Shipped | Weather: Windy
+    [!] Telemetry anomaly detected (Weather: Windy, Speed: 80.0 km/h). Running ML logistics evaluation...
+    [DEBUG] GraphDB Context: Lead Time Days=1, Supplier Reliability=0.15
+    [i] ML Model Predicted Transit Delay Deviation: 3.2251 hours
+    [!] RISK FLAGGED! Predicted Delay: 3.23h. Invoking API...
     [+] API Success: Alarm generated securely.
+    [+] Alert text: **Alert: Potential Assembly Line Stoppage Risk**  
+
+Delivery DEL_EVAL_002 delays may disrupt parts inventory, risking assembly line stoppages if shortages escalate. Monitor stock levels closely and prepare contingency plans to mitigate production downtime.
+
+>> Ingested Telemetry for DEL_EVAL_003 | Status: Scheduled | Weather: Clear
+    [+] Telemetry is nominal. No action needed.
+
+>> Ingested Telemetry for DEL_EVAL_003 | Status: Shipped | Weather: Heavy Snow
+    [!] Telemetry anomaly detected (Weather: Heavy Snow, Speed: 0.0 km/h). Running ML logistics evaluation...
+    [DEBUG] GraphDB Context: Lead Time Days=7, Supplier Reliability=0.06
+    [i] ML Model Predicted Transit Delay Deviation: 5.2846 hours
+    [!] RISK FLAGGED! Predicted Delay: 5.28h. Invoking API...
+    [+] API Success: Alarm generated securely.
+    [+] Alert text: **ALERT:** Delivery DEL_EVAL_003 is delayed by 5 hours due to transport/weather conditions, risking potential assembly line stoppages if inventory buffers are exhausted. Monitor stock levels closely to mitigate disruptions, as the delay carries a medium process impact and estimated financial penalties of ~$104.17.
+
+============================================================
+  SIMULATION INGESTION COMPLETE
+============================================================
 ```
 
-### 2. Generated Manager Alert Output
-When `DEL_005` was flagged (On-Time confidence: `59.33%` < `65%` threshold), the backend's LangGraph risk engine ran to completion and generated the following validated manager alert:
+---
 
-> **Urgent Alert: Delivery DEL_005 Delay Risk**  
-> The 72-hour Carrier_Issue delay risks assembly line stoppages due to depleted stock below safety levels, with a high disruption probability (0.41). Immediate action is required to mitigate inventory shortages and avoid additional penalties of $1,500. (Note: This assumes the SLA penalty is capped at 3 days—verify contract terms if delay extends further.)
+## 3. Procurement Order Planning Model Integration
 
-### 3. Model Accuracy & Feature Importance Verification
-You can verify the classification accuracy and feature importances by running the following command:
-```powershell
-python delay_predictor_integration.py --verify
-```
+This model runs in the order planning screen to assess risk *before* placing a Purchase Order.
 
-**Verification Results Output:**
+### Component Walkthrough
+* **[seed_procurement_evaluation.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Machine_Learning/Procurement_Model/seed_procurement_evaluation.py):** Splits the procurement dataset, extracts 15 unique suppliers present in the 20% unseen test partition, and seeds their logistics metrics (tier, region, ESG score, terms) into GraphDB.
+* **[procurement_delay_predictor.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Machine_Learning/Procurement_Model/procurement_delay_predictor.py):** Legacy classifier code upgraded to use dynamic path resolution. Supports `--verify` for model validation.
+* **[order_risk_service.py](file:///c:/Users/waelm/Documents/GitHub/Graduation-Project2/Backend/services/order_risk_service.py):** Full 109-feature engineering and RandomForest inference execution in the FastAPI backend, utilizing GraphDB context.
+
+### Model Performance Verification Output
+Running the accuracy verification on the isolated test partition confirms stable model outputs:
 ```
 ============================================================
   MODEL ACCURACY & PERFORMANCE VERIFICATION
@@ -107,6 +134,3 @@ weighted avg       0.70      0.69      0.69      1040
     10. PO_Month_Num: 0.0327
 ============================================================
 ```
-This confirms the model performs with a strong `0.7591` ROC-AUC score. The feature importance shows that `Lead Time Days`, `Tier_LeadTime_Interaction`, and `Qty_per_Day` are the primary predictive drivers.
-
-

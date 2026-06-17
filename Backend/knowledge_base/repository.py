@@ -194,3 +194,61 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
     """
 
     return graphdb.execute_sparql_select(sparql_query)
+
+
+def get_active_suppliers() -> list[dict]:
+    """
+    Queries GraphDB to fetch all suppliers with their URIs and their hasName, 
+    rdfs:label, and hasReliabilityScore values.
+    """
+    query = f"""
+    {PREFIXES}
+    SELECT DISTINCT ?supplier ?name ?label ?oldScore
+    WHERE {{
+        ?supplier rdf:type :Supplier .
+        OPTIONAL {{ ?supplier :hasName ?name . }}
+        OPTIONAL {{ ?supplier rdfs:label ?label . }}
+        OPTIONAL {{ ?supplier :hasReliabilityScore ?oldScore . }}
+    }}
+    """
+    return graphdb.execute_sparql_select(query)
+
+
+def update_supplier_reliability_score(supplier_id: str, new_score: float) -> bool:
+    """
+    Executes a SPARQL UPDATE statement using the GraphDB connection broker to update
+    :hasReliabilityScore under the contracts named graph.
+    """
+    if supplier_id.startswith("http://") or supplier_id.startswith("https://"):
+        supplier_ref = f"<{supplier_id}>"
+    elif supplier_id.startswith(":"):
+        supplier_ref = supplier_id
+    else:
+        supplier_ref = f":{supplier_id}"
+
+    update_query = f"""
+    {PREFIXES}
+    
+    DELETE {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            {supplier_ref} :hasReliabilityScore ?oldScoreContracts .
+        }}
+        {supplier_ref} :hasReliabilityScore ?oldScoreDefault .
+    }}
+    INSERT {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            {supplier_ref} :hasReliabilityScore "{new_score}"^^xsd:float .
+        }}
+    }}
+    WHERE {{
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                {supplier_ref} :hasReliabilityScore ?oldScoreContracts .
+            }}
+        }}
+        OPTIONAL {{
+            {supplier_ref} :hasReliabilityScore ?oldScoreDefault .
+        }}
+    }}
+    """
+    return graphdb.execute_sparql_update(update_query)

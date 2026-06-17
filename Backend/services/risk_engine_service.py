@@ -655,5 +655,20 @@ async def process_iot_event(event: IoTTelemetryEvent) -> ManagerAlert:
             validated=False,
         )
 
+    # Trigger background supplier score recalculation based on this telemetry event
+    try:
+        from services.supplier_evaluator_service import record_telemetry_transaction_and_update_score
+        import threading
+        
+        logger.info("[Risk Engine] Spawning background thread to record delayed telemetry and update supplier score.")
+        thread = threading.Thread(
+            target=record_telemetry_transaction_and_update_score,
+            args=(event.delivery_id, event.estimated_delay_hours),
+            daemon=True
+        )
+        thread.start()
+    except Exception as exc:
+        logger.error("[Risk Engine] Failed to start background score update thread: %s", exc)
+
     return alert
 
