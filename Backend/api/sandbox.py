@@ -313,3 +313,21 @@ async def place_purchase_order(request: OrderRiskPredictionRequest):
             status_code=500,
             detail=f"Failed to place purchase order: {exc}"
         )
+
+
+@router.post("/migrate-supplier-scores")
+async def handle_migrate_supplier_scores():
+    """
+    Migration endpoint to initialize missing reliability scores for all existing suppliers.
+    Assigns a default score of 0.5 to suppliers that don't have a score yet.
+    """
+    try:
+        from knowledge_base import initialize_missing_supplier_scores
+        result = initialize_missing_supplier_scores()
+        return result
+    except Exception as exc:
+        logger.error("Supplier score migration failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to migrate supplier scores: {exc}"
+        )

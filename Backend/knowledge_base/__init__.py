@@ -11,4 +11,5 @@ from knowledge_base.repository import (
     find_impacted_products_by_supplier_delay,
     get_active_suppliers,
     update_supplier_reliability_score,
+    initialize_missing_supplier_scores,
 )

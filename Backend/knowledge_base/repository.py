@@ -253,3 +253,60 @@ def update_supplier_reliability_score(supplier_id: str, new_score: float) -> boo
     }}
     """
     return graphdb.execute_sparql_update(update_query)
+
+
+def initialize_missing_supplier_scores() -> dict:
+    """
+    Find all suppliers in GraphDB that don't have a hasReliabilityScore
+    and assign them a default score of 0.5.
+    
+    This is a migration function for existing suppliers that were created
+    without a reliability score.
+    """
+    # First, find all suppliers without a score
+    query_find = f"""
+    {PREFIXES}
+    SELECT DISTINCT ?supplier
+    WHERE {{
+        ?supplier rdf:type :Supplier .
+        FILTER NOT EXISTS {{ ?supplier :hasReliabilityScore ?score . }}
+    }}
+    """
+    
+    suppliers_without_score = graphdb.execute_sparql_select(query_find)
+    
+    if not suppliers_without_score:
+        return {"status": "success", "message": "All suppliers already have reliability scores.", "updated_count": 0}
+    
+    # Update each supplier with default score
+    updated_count = 0
+    for result in suppliers_without_score:
+        supplier_uri = result.get("supplier")
+        if supplier_uri:
+            # Extract the fragment identifier
+            if "#" in supplier_uri:
+                supplier_id = supplier_uri.split("#")[-1]
+                supplier_ref = f":{supplier_id}"
+            else:
+                supplier_ref = f"<{supplier_uri}>"
+            
+            # Insert the default score
+            update_query = f"""
+            {PREFIXES}
+            INSERT DATA {{
+                GRAPH <{CONTRACT_GRAPH}> {{
+                    {supplier_ref} :hasReliabilityScore "0.5"^^xsd:float .
+                }}
+            }}
+            """
+            try:
+                graphdb.execute_sparql_update(update_query)
+                updated_count += 1
+            except Exception as e:
+                logger.error(f"Failed to update supplier {supplier_id}: {e}")
+    
+    return {
+        "status": "success",
+        "message": f"Initialized reliability scores for {updated_count} suppliers.",
+        "updated_count": updated_count
+    }
