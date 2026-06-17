@@ -1,20 +1,20 @@
 export const C = {
-  bg:       "#0a0e1a",
-  surface:  "#111827",
+  bg: "#0a0e1a",
+  surface: "#111827",
   surface2: "#0f1929",
-  border:   "#1e2d45",
+  border: "#1e2d45",
   borderHi: "#2a4a6b",
-  text:     "#f1f5f9",
+  text: "#f1f5f9",
   textSoft: "#cbd5e1",
-  muted:    "#64748b",
-  accent:   "#f59e0b",
+  muted: "#64748b",
+  accent: "#f59e0b",
   accentLo: "#78350f",
-  blue:     "#3b82f6",
-  green:    "#10b981",
-  red:      "#ef4444",
-  orange:   "#f97316",
-  purple:   "#8b5cf6",
-  pink:     "#ec4899",
+  blue: "#3b82f6",
+  green: "#10b981",
+  red: "#ef4444",
+  orange: "#f97316",
+  purple: "#8b5cf6",
+  pink: "#ec4899",
 };
 
 export const S = {
@@ -40,9 +40,9 @@ export const S = {
   },
   pageDesc: { fontSize: 14, color: "#64748b", marginTop: 6, lineHeight: 1.5 },
 
-  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr",        gap: 18, marginBottom: 18 },
-  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr",    gap: 18, marginBottom: 18 },
-  grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)",  gap: 16, marginBottom: 22 },
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 },
+  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 18 },
+  grid4: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 22 },
 
   table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
   th: {
@@ -79,12 +79,12 @@ export const S = {
     cursor: "pointer", border: "none", letterSpacing: "0.01em",
     fontFamily: "'Inter', -apple-system, sans-serif",
     background: variant === "primary" ? "#f59e0b"
-               : variant === "danger"  ? "#ef4444"
-               : variant === "ghost"   ? "transparent"
-               : "#1e2d45",
+      : variant === "danger" ? "#ef4444"
+        : variant === "ghost" ? "transparent"
+          : "#1e2d45",
     color: variant === "primary" ? "#000"
-          : variant === "danger"  ? "#fff"
-          : variant === "ghost"   ? "#94a3b8"
+      : variant === "danger" ? "#fff"
+        : variant === "ghost" ? "#94a3b8"
           : "#f1f5f9",
     border: variant === "ghost" ? "1px solid #1e2d45" : "none",
     boxShadow: variant === "primary" ? "0 2px 8px rgba(245,158,11,0.25)" : "none",
@@ -99,10 +99,10 @@ export const S = {
   }),
   riskBadge: (level) => {
     const map = {
-      HIGH:      { bg: "#ef444422", color: "#ef4444" },
-      MEDIUM:    { bg: "#f9731622", color: "#f97316" },
-      LOW:       { bg: "#10b98122", color: "#10b981" },
-      CRITICAL:  { bg: "#ec489922", color: "#ec4899" },
+      HIGH: { bg: "#ef444422", color: "#ef4444" },
+      MEDIUM: { bg: "#f9731622", color: "#f97316" },
+      LOW: { bg: "#10b98122", color: "#10b981" },
+      CRITICAL: { bg: "#ec489922", color: "#ec4899" },
       MITIGATED: { bg: "#10b98122", color: "#10b981" },
     };
     const t = map[level] || { bg: "#1e2d45", color: "#64748b" };

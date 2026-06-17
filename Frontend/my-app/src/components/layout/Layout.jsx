@@ -2,7 +2,7 @@ import { C } from "../../styles/theme";
 import Sidebar from "./Sidebar";
 import Topbar  from "./Topbar";
 
-export default function Layout({ activePage, onNavigate, user, onLogout, children }) {
+export default function Layout({ activePage, onNavigate, user, onLogout, children, onRefresh, refreshKey }) {
   return (
     <div style={{
       display: "flex", height: "100vh", width: "100vw",
@@ -12,8 +12,8 @@ export default function Layout({ activePage, onNavigate, user, onLogout, childre
     }}>
       <Sidebar activePage={activePage} onNavigate={onNavigate} user={user} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <Topbar activePage={activePage} onNavigate={onNavigate} user={user} onLogout={onLogout} />
-        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }} className="page-enter" key={activePage}>
+        <Topbar activePage={activePage} onNavigate={onNavigate} user={user} onLogout={onLogout} onRefresh={onRefresh} />
+        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }} className="page-enter" key={`${activePage}-${refreshKey}`}>
           {children}
         </div>
       </div>

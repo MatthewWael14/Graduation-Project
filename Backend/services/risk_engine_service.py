@@ -540,6 +540,40 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
     )
 
     logger.info("    Selected final alert for %s: %.100s ...", title, alert_text)
+
+    # Save to GraphDB
+    try:
+        from knowledge_base.connection import graphdb
+        from knowledge_base.repository import _sanitize_uri_fragment
+        import hashlib
+        import time
+
+        delivery_uri = _sanitize_uri_fragment(event.delivery_id)
+        raw_str = f"ML_{delivery_uri}_{title}_{int(time.time())}".encode("utf-8")
+        alert_id = "ALT_" + hashlib.md5(raw_str).hexdigest()[:8].upper()
+
+        safe_title = title.replace('"', '\\"')
+        safe_text = alert_text.replace('"', '\\"')
+
+        insert_query = f"""
+        PREFIX : <http://example.org/ontology#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        INSERT DATA {{
+            GRAPH <http://example.org/contracts/> {{
+                :{alert_id} rdf:type :SystemAlert ;
+                            :hasTitle "At-Risk Delivery — {safe_title}"^^xsd:string ;
+                            :hasDesc "{safe_text}"^^xsd:string ;
+                            :intendedFor "{safe_title}"^^xsd:string ;
+                            :hasStatus "UNREAD"^^xsd:string ;
+                            :triggeredBy :{delivery_uri} .
+            }}
+        }}
+        """
+        graphdb.execute_sparql_update(insert_query)
+        logger.info("    Successfully saved ManagerAlert :%s into GraphDB.", alert_id)
+    except Exception as exc:
+        logger.warning("    Failed to save ManagerAlert to GraphDB: %s", exc)
+
     return state
 
 

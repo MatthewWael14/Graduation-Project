@@ -11,18 +11,18 @@ function useOutsideClick(ref, handler) {
   }, [ref, handler]);
 }
 
-export default function Topbar({ activePage, onNavigate, user, onLogout }) {
+export default function Topbar({ activePage, onNavigate, user, onLogout, onRefresh }) {
   const [notifOpen,     setNotifOpen]     = useState(false);
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [riskCount,     setRiskCount]     = useState(0);
+  const [refreshing,    setRefreshing]    = useState(false);
   const notifRef   = useRef(null);
   const profileRef = useRef(null);
   useOutsideClick(notifRef,   () => setNotifOpen(false));
   useOutsideClick(profileRef, () => setProfileOpen(false));
 
-  useEffect(() => {
-    // Fetch live data for the topbar badges and dropdowns
+  const loadTopbarData = () => {
     fetchKPIs().then(data => {
       if (data && typeof data.at_risk_shipments !== 'undefined') {
         setRiskCount(data.at_risk_shipments);
@@ -31,10 +31,20 @@ export default function Topbar({ activePage, onNavigate, user, onLogout }) {
 
     fetchAlerts().then(data => {
       if (Array.isArray(data)) {
-        setNotifications(data);
+        const filteredData = data.filter(a => !user || user.role === "admin" || !a.roles || a.roles.includes(user.role));
+        setNotifications(filteredData);
       }
     }).catch(console.error);
-  }, []);
+  };
+
+  useEffect(() => { loadTopbarData(); }, [user]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    loadTopbarData();
+    if (onRefresh) await onRefresh();
+    setTimeout(() => setRefreshing(false), 800);
+  };
 
   const unread = notifications.filter(n => n.unread).length;
 
@@ -62,6 +72,36 @@ export default function Topbar({ activePage, onNavigate, user, onLogout }) {
 
       {/* Right */}
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+
+        {/* Refresh button */}
+        <button
+          onClick={handleRefresh}
+          title="Refresh all live data from Knowledge Graph"
+          className="btn-hover"
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: refreshing ? C.accent + "18" : "transparent",
+            border: `1px solid ${refreshing ? C.accent + "55" : C.border}`,
+            borderRadius: 7, padding: "0 10px", height: 34, cursor: "pointer",
+            color: refreshing ? C.accent : C.muted,
+            fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+            letterSpacing: "0.04em", transition: "all 0.2s",
+          }}
+        >
+          <svg
+            width="13" height="13" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            style={{
+              transition: "transform 0.7s ease",
+              transform: refreshing ? "rotate(360deg)" : "rotate(0deg)",
+            }}
+          >
+            <path d="M23 4v6h-6" />
+            <path d="M1 20v-6h6" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+          {refreshing ? "Syncing…" : "Refresh"}
+        </button>
 
         {/* Bell */}
         <div ref={notifRef} style={{ position: "relative" }}>

@@ -141,24 +141,34 @@ def get_compliance_alerts() -> list[dict]:
     rows = graphdb.execute_sparql_select(query)
     
     impacted = find_impacted_products_by_supplier_delay()
-    delayed_suppliers = {r.get("supplierLabel", "") for r in impacted if r.get("supplierLabel")}
+    supplier_delay_map = {}
+    for r in impacted:
+        sup = r.get("supplierLabel", "")
+        delay_hrs = float(r.get("delayHours", 0) or 0)
+        if sup:
+            # Convert hours to days, fallback to 1 if delayed but no hours found
+            supplier_delay_map[sup] = int(delay_hrs / 24) if delay_hrs > 0 else 1
 
     alerts = []
     for row in rows:
         supplier_name = row.get("supplierName", "Unknown")
-        is_delayed = supplier_name in delayed_suppliers
-
-        # compliance: calculate from reliabilityScore or fallback based on current delay
-        raw_reliability = row.get("reliabilityScore")
-        if raw_reliability is not None:
-            compliance_val = float(raw_reliability)
-            compliance = int(compliance_val * 100) if compliance_val <= 1.0 else int(compliance_val)
-        else:
-            # Dynamic fallback: 98% if no issues, 55% if currently delayed
-            compliance = 55 if is_delayed else 98
+        is_delayed = supplier_name in supplier_delay_map
+        actual_delay_days = supplier_delay_map.get(supplier_name, 0)
 
         # leadTimeDays as int
         lead_days = int(float(row.get("leadTimeDays", 0) or 0))
+
+        # SLA Compliance strictly evaluates contract adherence based on active breaches.
+        # If there is no delay, the contract is 100% compliant.
+        # If breached, compliance drops proportionally to the severity of the delay.
+        if actual_delay_days == 0:
+            compliance = 100
+        else:
+            if lead_days > 0:
+                severity = actual_delay_days / lead_days
+                compliance = max(0, int((1.0 - severity) * 100))
+            else:
+                compliance = 0  # 0% if delayed and no baseline lead time is established
 
         # penaltyRate as numeric
         penalty_rate = float(row.get("penaltyRate", 0) or 0)
@@ -166,13 +176,13 @@ def get_compliance_alerts() -> list[dict]:
         # deadline: prefer material-level, fall back to supplier-level
         deadline = row.get("deliveryDeadline", row.get("materialDeadline", "—")) or "—"
 
-        # risk: use stored value or derive from compliance
+        # risk: use stored value or derive from compliance, fallback to HIGH/LOW if delayed
         risk = row.get("riskLevel")
         if not risk:
             if compliance is not None:
                 risk = "CRITICAL" if compliance < 50 else "HIGH" if compliance < 70 else "MEDIUM" if compliance < 85 else "LOW"
             else:
-                risk = "MEDIUM"
+                risk = "HIGH" if is_delayed else "LOW"
 
         # clause
         clause = row.get("clause", row.get("penalty", "—")) or "—"
@@ -190,14 +200,14 @@ def get_compliance_alerts() -> list[dict]:
             "material":        row.get("materialName", "Unknown"),
             "materialLabel":   row.get("materialName", "Unknown"),
             "leadTimeDays":    lead_days,
-            "delayDays":       lead_days if supplier_name in delayed_suppliers else 0,
+            "delayDays":       actual_delay_days,
             "penalty":         penalty_display,
             "penaltyRate":     penalty_rate,
             "compliance":      compliance,
             "deadline":        deadline,
             "risk":            risk,
             "clause":          clause,
-            "violationStatus": supplier_name in delayed_suppliers,
+            "violationStatus": is_delayed,
         })
     return alerts
 
@@ -255,6 +265,7 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     {PREFIXES}
     DELETE {{
         ?oldSupplier :supplies :{material_uri} .
+        ?delivery :hasDeliveryStatus "Delayed" .
     }}
     INSERT {{
         GRAPH <{CONTRACT_GRAPH}> {{
@@ -262,10 +273,16 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
                             :supplies :{material_uri} ;
                             :hasAssignmentType "{assignment_type}" .
         }}
+        ?delivery :hasDeliveryStatus "Resolved" .
     }}
     WHERE {{
         OPTIONAL {{
             ?oldSupplier :supplies :{material_uri} .
+        }}
+        OPTIONAL {{
+            ?delivery rdf:type :DeliveryEvent ;
+                      :transports :{material_uri} ;
+                      :hasDeliveryStatus "Delayed" .
         }}
     }}
     """
@@ -323,6 +340,14 @@ def get_kpis() -> dict:
     rows_pen = graphdb.execute_sparql_select(q_penalty)
     sla_contracts = int(rows_pen[0].get("count", 0)) if rows_pen else 0
 
+    # Calculate total SLA penalties owed from actual violations
+    alerts = get_compliance_alerts()
+    total_penalty_owed = 0
+    for a in alerts:
+        if a["violationStatus"] and a["penaltyRate"] > 0 and a["delayDays"] > 2:
+            billable_days = a["delayDays"] - 2
+            total_penalty_owed += billable_days * a["penaltyRate"]
+
     # SLA compliance = % of suppliers NOT at risk (simple heuristic)
     unique_delayed_suppliers = len(set(r.get("supplierLabel") for r in impacted if r.get("supplierLabel") and r.get("supplierLabel") != "Unknown"))
     sla_compliance = (
@@ -330,81 +355,89 @@ def get_kpis() -> dict:
         if active_suppliers > 0 else 100
     )
 
+    # Count live ML SystemAlerts
+    q_alerts = f"""
+    {PREFIXES}
+    SELECT (COUNT(DISTINCT ?alert) AS ?count)
+    WHERE {{
+        ?alert rdf:type :SystemAlert ;
+               :hasStatus ?status .
+        FILTER(?status != "DISMISSED")
+    }}
+    """
+    rows_alerts = graphdb.execute_sparql_select(q_alerts)
+    live_alerts_count = int(rows_alerts[0].get("count", 0)) if rows_alerts else 0
+
     return {
         # Keys match EXACTLY what Dashboard.jsx buildKpiCards() reads:
         "active_suppliers":  active_suppliers,
         "at_risk_shipments": at_risk_shipments,
         "sla_compliance":    sla_compliance,
-        "avg_lead_time":     avg_delay,       # Dashboard reads kpis.avg_lead_time
-        "total_penalty":     sla_contracts,   # Dashboard reads kpis.total_penalty
-        "alert_count":       at_risk_shipments,  # Dashboard reads kpis.alert_count
+        "avg_lead_time":     avg_delay,       
+        "total_penalty":     total_penalty_owed,  # Real calculated dollar amount
+        "alert_count":       live_alerts_count,  
+
     }
 
 
 def get_alerts() -> list[dict]:
     """
-    Build alert objects from at-risk materials in the Knowledge Graph.
-    Returns a list matching the shape expected by the Alerts page:
-      id, icon, type, category, title, desc, time, date, unread, from, roles
+    Fetch ML-generated ManagerAlerts directly from the Knowledge Graph.
+    Routes them to the specific managers intended by the AI Risk Engine.
     """
-    results = find_impacted_products_by_supplier_delay()
-    # Fetch alert statuses from GraphDB
-    q_status = f"""
+    query = f"""
     {PREFIXES}
-    SELECT ?alertId ?status WHERE {{
-        ?alert a :SystemAlert ;
+    SELECT ?alertId ?title ?desc ?intendedFor ?status
+    WHERE {{
+        ?alert rdf:type :SystemAlert ;
+               :hasTitle ?title ;
+               :hasDesc ?desc ;
+               :intendedFor ?intendedFor ;
                :hasStatus ?status .
         BIND(REPLACE(STR(?alert), "^.*#", "") AS ?alertId)
     }}
+    ORDER BY DESC(?alertId)
     """
-    status_rows = graphdb.execute_sparql_select(q_status)
-    status_map = {r.get("alertId"): r.get("status") for r in status_rows}
+    rows = graphdb.execute_sparql_select(query)
 
     alerts = []
-    for i, row in enumerate(results):
-        material = row.get("materialLabel", row.get("material", "Unknown Material"))
-        supplier = row.get("supplierLabel", row.get("supplier", "Unknown Supplier"))
-        product  = row.get("productLabel",  row.get("product",  ""))
-        is_risk  = str(row.get("riskStatus", "false")).lower() == "true"
+    for r in rows:
+        alert_id = r.get("alertId")
+        title = r.get("title")
+        desc = r.get("desc")
+        status = r.get("status")
+        intended_for = r.get("intendedFor", "")
 
-        # Generate a stable ID based on material and supplier
-        raw_str = f"{supplier}_{material}".encode("utf-8")
-        alert_id = "ALT_" + hashlib.md5(raw_str).hexdigest()[:8].upper()
+        if status == "DISMISSED":
+            continue
 
-        current_status = status_map.get(alert_id, "UNREAD")
-        if current_status == "DISMISSED":
-            continue  # Do not return dismissed alerts
+        # Map the specific ML manager title to the frontend user roles
+        roles = ["admin"]
+        if "Production" in intended_for:
+            roles.append("production")
+        if "Logistics" in intended_for:
+            roles.append("logistics")
+        if "Procurement" in intended_for:
+            roles.append("procurement")
 
-        is_unread = current_status == "UNREAD" and is_risk
-
-        alert_type = "CRITICAL" if is_risk else "INFO"
-        icon       = "🔴" if is_risk else "🔵"
-        category   = "Inventory" if is_risk else "System"
-        title      = (
-            f"At-Risk Material — {material}"
-            if is_risk
-            else f"Monitored Material — {material}"
-        )
-        desc = (
-            f"Supplier {supplier} has a delayed delivery for {material}."
-            + (f" Impacted process: {product}." if product else "")
-            + (" Immediate action recommended." if is_risk else "")
-        )
+        icon = "🚨" if "Production" in intended_for else "🚚" if "Logistics" in intended_for else "📝"
+        category = "Inventory" if "Production" in intended_for else "SLA Breach"
 
         alerts.append({
             "id":       alert_id,
             "icon":     icon,
-            "type":     alert_type,
+            "type":     "CRITICAL",
             "category": category,
             "title":    title,
             "desc":     desc,
-            "time":     "Live",
+            "time":     "Live ML Alert",
             "date":     "Knowledge Graph",
-            "unread":   is_unread,
-            "from":     None,
-            "fromRole": None,
-            "roles":    ["admin", "logistics", "procurement", "production"],
+            "unread":   (status == "UNREAD"),
+            "from":     "Risk Engine",
+            "fromRole": "AI",
+            "roles":    roles,
         })
+        
     return alerts
 
 def update_alert_status(alert_id: str, status: str) -> dict:

@@ -12,14 +12,16 @@ import { ROLE_HOME, ROLE_PAGES } from "./auth/roles";
 import "./styles/dashboard.css";
 
 export default function App() {
-  const [user,       setUser]       = useState(null);
-  const [activePage, setActivePage] = useState("dashboard");
+  const [user,        setUser]        = useState(null);
+  const [activePage,  setActivePage]  = useState("dashboard");
+  const [refreshKey,  setRefreshKey]  = useState(0);
 
-  const handleLogin = (u) => { setUser(u); setActivePage(ROLE_HOME[u.role] || "dashboard"); };
-  const handleLogout = ()  => { setUser(null); setActivePage("dashboard"); };
+  const handleLogin    = (u) => { setUser(u); setActivePage(ROLE_HOME[u.role] || "dashboard"); };
+  const handleLogout   = ()  => { setUser(null); setActivePage("dashboard"); };
   const handleNavigate = (page) => {
     if ((ROLE_PAGES[user?.role] || []).includes(page)) setActivePage(page);
   };
+  const handleRefresh  = () => setRefreshKey(k => k + 1);
 
   if (!user) return <Login onLogin={handleLogin} />;
 
@@ -39,7 +41,7 @@ export default function App() {
   };
 
   return (
-    <Layout activePage={activePage} onNavigate={handleNavigate} user={user} onLogout={handleLogout}>
+    <Layout activePage={activePage} onNavigate={handleNavigate} user={user} onLogout={handleLogout} onRefresh={handleRefresh} refreshKey={refreshKey}>
       {renderPage()}
     </Layout>
   );

@@ -1,16 +1,16 @@
 import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
-import KPISection         from "../components/dashboard/KPISection";
-import RiskPanel          from "../components/dashboard/RiskPanel";
+import KPISection from "../components/dashboard/KPISection";
+import RiskPanel from "../components/dashboard/RiskPanel";
 import SLAViolationsTable from "../components/dashboard/SLAViolationsTable";
-import ReliabilityChart   from "../components/dashboard/ReliabilityChart";
+import ReliabilityChart from "../components/dashboard/ReliabilityChart";
 import { fetchRiskScores, fetchComplianceAlerts, fetchKPIs } from "../services/api";
 
 const ROLE_CFG = {
-  admin:       { showRisk: true,  showReliability: true,  showSla: true  },
-  logistics:   { showRisk: true,  showReliability: false, showSla: false },
-  procurement: { showRisk: false, showReliability: true,  showSla: true  },
-  production:  { showRisk: true,  showReliability: false, showSla: false },
+  admin: { showRisk: true, showReliability: true, showSla: true },
+  logistics: { showRisk: true, showReliability: false, showSla: false },
+  procurement: { showRisk: false, showReliability: true, showSla: true },
+  production: { showRisk: true, showReliability: false, showSla: false },
 };
 
 // KPI card skeleton — values filled from backend on mount
@@ -69,11 +69,11 @@ function ErrorState({ message }) {
 export default function Dashboard({ user }) {
   const cfg = ROLE_CFG[user?.role] || ROLE_CFG.admin;
 
-  const [riskScores,   setRiskScores]   = useState([]);
-  const [slaAlerts,    setSlaAlerts]    = useState([]);
-  const [kpis,         setKpis]         = useState({});
-  const [loading,      setLoading]      = useState(true);
-  const [error,        setError]        = useState("");
+  const [riskScores, setRiskScores] = useState([]);
+  const [slaAlerts, setSlaAlerts] = useState([]);
+  const [kpis, setKpis] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -98,55 +98,56 @@ export default function Dashboard({ user }) {
   const kpiCards = buildKpiCards(kpis);
 
   const visibleKpis = user?.role === "procurement"
-    ? kpiCards.filter(k => ["SLA Compliance","Alerts (48h)","Total Penalties","At-Risk Shipments"].includes(k.label))
+    ? kpiCards.filter(k => ["SLA Compliance", "Alerts (48h)", "Total Penalties", "At-Risk Shipments"].includes(k.label))
     : user?.role === "production"
-    ? kpiCards.filter(k => ["At-Risk Shipments","Alerts (48h)","SLA Compliance","Avg Delay (days)"].includes(k.label))
-    : user?.role === "logistics"
-    ? kpiCards.filter(k => ["Active Suppliers","At-Risk Shipments","Avg Delay (days)","Alerts (48h)"].includes(k.label))
-    : kpiCards;
+      ? kpiCards.filter(k => ["At-Risk Shipments", "Alerts (48h)", "SLA Compliance", "Avg Delay (days)"].includes(k.label))
+      : user?.role === "logistics"
+        ? kpiCards.filter(k => ["Active Suppliers", "At-Risk Shipments", "Avg Delay (days)", "Alerts (48h)"].includes(k.label))
+        : kpiCards;
 
 
   // Map risk scores to RiskPanel format
   const riskPanelData = riskScores.map(r => ({
-    material:    r.material   || r.materialLabel   || "Unknown Material",
-    supplier:    r.supplier   || r.supplierLabel   || "Unknown Supplier",
-    impact:      r.product    || r.productLabel    || "",
+    material: r.material || r.materialLabel || "Unknown Material",
+    supplier: r.supplier || r.supplierLabel || "Unknown Supplier",
+    impact: r.product || r.productLabel || "",
     trafficLight: r.status === "RED" ? "RED" : "GREEN",
-    risk:        r.status === "RED" ? "HIGH" : "LOW",
-    stock:       r.stock      || 0,
-    threshold:   r.threshold  || 0,
-    delay:       r.delayDuration || 0,
-    delayProb:   r.status === "RED" ? 80 : 10,
-    processes:   r.product ? [r.product] : [],
+    risk: r.status === "RED" ? "HIGH" : "LOW",
+    stock: r.stock || 0,
+    threshold: r.threshold || 0,
+    delay: r.delayDuration || 0,
+    delayProb: r.status === "RED" ? 80 : 10,
+    processes: r.product ? [r.product] : [],
   }));
 
   // Map risk scores to ReliabilityChart format (unique suppliers)
   const uniqueSuppliers = Array.from(new Set(riskScores.map(r => r.supplier || r.supplierLabel)));
   const reliabilityData = uniqueSuppliers.map(supName => {
     const s = riskScores.find(r => (r.supplier || r.supplierLabel) === supName);
-    const scoreVal = s.reliabilityScore ? parseFloat(s.reliabilityScore) : (s.status === "RED" ? 0.4 : 0.85);
+    if (!s.reliabilityScore) return null;
+    const scoreVal = parseFloat(s.reliabilityScore);
     return {
       name: supName,
       score: Math.round(scoreVal * 100),
       countryCode: (s.country || "GL").substring(0, 2).toUpperCase(),
-      risk: s.status === "RED" ? "CRITICAL" : "LOW",
+      risk: scoreVal < 0.5 ? "CRITICAL" : "LOW",
     };
-  }).sort((a, b) => b.score - a.score).slice(0, 5);
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 5);
 
   // Map compliance alerts to SLA table format
   const slaTableData = slaAlerts.map((a, i) => ({
-    id:              `SLA-${String(i + 1).padStart(3, "0")}`,
-    supplier:        a.supplier      || a.supplierLabel || "Unknown",
-    material:        a.material      || a.materialLabel || "Unknown",
-    deadline:        a.deadline      || "—",
-    compliance:      a.compliance    !== undefined ? a.compliance : null,
-    risk:            a.risk          || "MEDIUM",
-    penalty:         a.penalty       || a.penaltyRate ? `$${a.penaltyRate}/day` : "—",
-    penaltyDaily:    a.penaltyRate   || 0,
-    delayDays:       a.delayDays     || 0,
+    id: `SLA-${String(i + 1).padStart(3, "0")}`,
+    supplier: a.supplier || a.supplierLabel || "Unknown",
+    material: a.material || a.materialLabel || "Unknown",
+    deadline: a.deadline || "—",
+    compliance: a.compliance !== undefined ? a.compliance : null,
+    risk: a.risk || "MEDIUM",
+    penalty: a.penalty || a.penaltyRate ? `$${a.penaltyRate}/day` : "—",
+    penaltyDaily: a.penaltyRate || 0,
+    delayDays: a.delayDays || 0,
     violationStatus: a.violationStatus,
-    gracePeriod:     "48h",
-    clause:          a.clause        || "—",
+    gracePeriod: "48h",
+    clause: a.clause || "—",
   }));
 
   return (

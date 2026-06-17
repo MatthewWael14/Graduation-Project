@@ -5,12 +5,12 @@ export default function SLAViolationsTable({ data }) {
     <div style={S.card}>
       <div style={S.cardHeader}>
         <span style={S.cardTitle}>📋 SLA Compliance Monitor</span>
-        <span style={{ fontSize: 13, color: C.muted }}>{data.length} contracts · {data.filter(d=>d.violationStatus).length} breached</span>
+        <span style={{ fontSize: 13, color: C.muted }}>{data.length} contracts · {data.filter(d => d.violationStatus).length} breached</span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={S.table}>
           <thead>
-            <tr>{["ID","Supplier","Material","Deadline","Compliance","Status","Daily Penalty"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+            <tr>{["ID", "Supplier", "Material", "Deadline", "Compliance", "Status", "Daily Penalty"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {data.map((s, i) => (

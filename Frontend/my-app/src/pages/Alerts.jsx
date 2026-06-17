@@ -46,9 +46,10 @@ export default function Alerts({ user }) {
   };
 
   const filtered = alerts.filter(a => {
+    const roleMatch = !user || user.role === "admin" || !a.roles || a.roles.includes(user.role);
     const catMatch  = filter    === "All" || a.category === filter;
     const typeMatch = typeFilter === "All" || a.type     === typeFilter;
-    return catMatch && typeMatch;
+    return roleMatch && catMatch && typeMatch;
   });
 
   const unreadCount  = alerts.filter(a => a.unread).length;

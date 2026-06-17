@@ -135,13 +135,15 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
     sparql_query = f"""
     {PREFIXES}
 
-    SELECT DISTINCT ?supplierLabel ?materialLabel ?productLabel ?riskStatus
+    SELECT DISTINCT ?supplierLabel ?materialLabel ?productLabel ?riskStatus ?delayHours
     WHERE {{
         # ── Find delayed deliveries and their transported material ──
         ?delivery  rdf:type     :DeliveryEvent ;
                    :hasDeliveryStatus ?status ;
                    :transports  ?material .
         FILTER(STR(?status) = "Delayed")
+        
+        OPTIONAL {{ ?delivery :hasDelayDuration ?delayHours . }}
         
         # ── Find what supplier provides that material ──
         OPTIONAL {{
