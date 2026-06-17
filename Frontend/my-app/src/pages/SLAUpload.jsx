@@ -2,6 +2,24 @@ import { useState } from "react";
 import { C, S } from "../styles/theme";
 import { uploadSLAPdf, confirmSLA } from "../services/api";
 
+// ── Field must be defined OUTSIDE the parent component so React
+// does not remount it on every keystroke (which caused typing to break)
+function Field({ label, field, type = "text", editedFields, setEditedFields }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+        {label}
+      </label>
+      <input
+        type={type}
+        value={editedFields[field] || ""}
+        onChange={e => setEditedFields(p => ({ ...p, [field]: e.target.value }))}
+        style={S.input}
+      />
+    </div>
+  );
+}
+
 export default function SLAUpload({ user }) {
   const [dragging,     setDragging]     = useState(false);
   const [step,         setStep]         = useState("idle"); // idle | extracting | review | confirming | done | error
@@ -78,15 +96,6 @@ export default function SLAUpload({ user }) {
     setError(""); setEditedFields({}); setPipelineStep(0);
   };
 
-  const Field = ({ label, field, type = "text" }) => (
-    <div style={{ marginBottom: 12 }}>
-      <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-        {label}
-      </label>
-      <input type={type} value={editedFields[field] || ""} onChange={e => setEditedFields(p => ({ ...p, [field]: e.target.value }))} style={S.input} />
-    </div>
-  );
-
   return (
     <div>
       <div style={S.pageHeader}>
@@ -112,11 +121,11 @@ export default function SLAUpload({ user }) {
               }}
             >
               <div style={{ fontSize: 48, marginBottom: 14 }}>📄</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Drop SLA Contract PDF Here</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>Text-based PDF · English · Max 50MB</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Drop SLA Contract Here</div>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>PDF · TXT · DOC · DOCX · Max 50MB</div>
               <label style={{ ...S.btn(), cursor: "pointer", display: "inline-block" }}>
                 Browse Files
-                <input type="file" accept=".pdf" style={{ display: "none" }} onChange={handleBrowse} />
+                <input type="file" accept=".pdf,.txt,.doc,.docx,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style={{ display: "none" }} onChange={handleBrowse} />
               </label>
 
               {step === "error" && (
@@ -176,10 +185,10 @@ export default function SLAUpload({ user }) {
                 </div>
               )}
 
-              <Field label="Supplier Name"   field="supplier_name" />
-              <Field label="Material"         field="material" />
-              <Field label="Lead Time (Days)" field="lead_time_days" type="number" />
-              <Field label="Penalty Clause"   field="penalty_clause" />
+              <Field label="Supplier Name"   field="supplier_name"  editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Material"         field="material"       editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Lead Time (Days)" field="lead_time_days" type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Penalty Clause"   field="penalty_clause" editedFields={editedFields} setEditedFields={setEditedFields} />
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
@@ -229,7 +238,7 @@ export default function SLAUpload({ user }) {
           )}
         </div>
 
-        {/* Right: Extraction ID info panel */}
+        {/* Right: How it works panel */}
         <div style={S.card}>
           <div style={{ ...S.cardTitle, marginBottom: 16 }}>ℹ How It Works</div>
           {[
@@ -249,8 +258,8 @@ export default function SLAUpload({ user }) {
           ))}
 
           <div style={{ padding: "12px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, marginTop: 8 }}>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, fontWeight: 600 }}>SUPPORTED FORMAT</div>
-            <div style={{ fontSize: 13, color: C.text }}>Text-based PDF · English language contracts only</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, fontWeight: 600 }}>SUPPORTED FORMATS</div>
+            <div style={{ fontSize: 13, color: C.text }}>PDF · TXT · DOC · DOCX · English language contracts only</div>
           </div>
         </div>
       </div>

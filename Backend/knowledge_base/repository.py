@@ -80,6 +80,20 @@ def create_contract_graph(contract: SLAContract) -> dict:
     supplier_uri = _sanitize_uri_fragment(contract.supplier_name)
     material_uri = _sanitize_uri_fragment(contract.material)
 
+    # ---- Sanitize values before embedding in SPARQL ----
+    # lead_time_days must be a valid integer (min 1) — empty string crashes GraphDB
+    try:
+        lead_days = max(1, int(contract.lead_time_days))
+    except (TypeError, ValueError):
+        lead_days = 1
+
+    # penalty_clause: escape double-quotes and newlines so SPARQL string is valid
+    raw_penalty = str(contract.penalty_clause or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", "")
+
+    # supplier/material labels: same escaping
+    safe_supplier_name = str(contract.supplier_name or "").replace('"', '\\"').replace("\n", " ")
+    safe_material = str(contract.material or "").replace('"', '\\"').replace("\n", " ")
+
     # ---- SPARQL UPDATE query ----
     # We use INSERT DATA to add triples into the contracts
     # Named Graph.  All URIs use the ontology namespace (:)
@@ -92,18 +106,18 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
             # ── Supplier individual ──
             :{supplier_uri}  rdf:type       :Supplier ;
-                             rdfs:label     "{contract.supplier_name}" .
+                             rdfs:label     "{safe_supplier_name}" .
 
             # ── RawMaterial individual ──
             :{material_uri}  rdf:type       :RawMaterial ;
-                             rdfs:label     "{contract.material}" .
+                             rdfs:label     "{safe_material}" .
 
             # ── Relationship: Supplier supplies RawMaterial ──
             :{supplier_uri}  :supplies      :{material_uri} .
 
             # ── SLA Properties on the Supplier ──
-            :{supplier_uri}  :leadTimeDays  {contract.lead_time_days} .
-            :{supplier_uri}  :penaltyClause "{contract.penalty_clause}" .
+            :{supplier_uri}  :leadTimeDays  {lead_days} .
+            :{supplier_uri}  :penaltyClause "{raw_penalty}" .
         }}
     }}
     """

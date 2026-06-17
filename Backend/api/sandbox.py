@@ -17,6 +17,10 @@ import io
 import logging
 
 import pdfplumber
+try:
+    import docx  # python-docx
+except ImportError:
+    docx = None
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from models.schemas import ConfirmedSLA, IoTTelemetryEvent, ManagerAlert, SLAContract
@@ -41,15 +45,49 @@ def _extract_text_from_pdf(file_bytes: bytes) -> str:
         raise ValueError(f"Failed to read PDF: {exc}") from exc
 
     raw = "\n".join(pages_text).strip()
-
     if not raw:
         raise ValueError(
             "The uploaded PDF appears to be empty or contains no "
             "extractable text.  Ensure the file is a text-based PDF, "
             "not a scanned image-only document."
         )
-
     return raw
+
+
+def _extract_text_from_txt(file_bytes: bytes) -> str:
+    for enc in ("utf-8", "latin-1", "cp1252"):
+        try:
+            raw = file_bytes.decode(enc).strip()
+            if raw:
+                return raw
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Could not decode the text file. Ensure it is UTF-8 or Latin-1 encoded.")
+
+
+def _extract_text_from_docx(file_bytes: bytes) -> str:
+    if docx is None:
+        raise ValueError("python-docx is not installed. Run: pip install python-docx")
+    try:
+        doc = docx.Document(io.BytesIO(file_bytes))
+        raw = "\n".join(p.text for p in doc.paragraphs).strip()
+    except Exception as exc:
+        raise ValueError(f"Failed to read DOCX: {exc}") from exc
+    if not raw:
+        raise ValueError("The DOCX file appears to be empty or contains no extractable text.")
+    return raw
+
+
+def _extract_text(file_bytes: bytes, filename: str) -> str:
+    """Dispatch text extraction based on file extension."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext == "pdf":
+        return _extract_text_from_pdf(file_bytes)
+    if ext == "txt":
+        return _extract_text_from_txt(file_bytes)
+    if ext in ("doc", "docx"):
+        return _extract_text_from_docx(file_bytes)
+    raise ValueError(f"Unsupported file type '.{ext}'. Accepted formats: PDF, TXT, DOC, DOCX.")
 
 
 @router.post("/upload-sla")
@@ -119,11 +157,11 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
 
     try:
-        raw_text = _extract_text_from_pdf(contents)
+        raw_text = _extract_text(contents, file.filename or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    logger.info("Extracted %d characters from PDF.", len(raw_text))
+    logger.info("Extracted %d characters from %s.", len(raw_text), file.filename)
 
     try:
         loop = asyncio.get_running_loop()
