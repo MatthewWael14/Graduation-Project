@@ -62,9 +62,8 @@ export async function dismissAlert(alertId) {
 
 // GET /api/dashboard/fallback-options/{material_id}
 export async function fetchFallbackOptions(material) {
-  const materialId = material.replace(/ /g, "_");
   const data = await safeFetch(
-    `${BASE}/api/dashboard/fallback-options/${encodeURIComponent(materialId)}`
+    `${BASE}/api/dashboard/fallback-options/${encodeURIComponent(material)}`
   );
   return data.suppliers || [];
 }

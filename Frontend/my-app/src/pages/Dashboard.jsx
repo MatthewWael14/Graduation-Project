@@ -130,9 +130,9 @@ export default function Dashboard({ user }) {
       name: supName,
       score: Math.round(scoreVal * 100),
       countryCode: (s.country || "GL").substring(0, 2).toUpperCase(),
-      risk: scoreVal < 0.5 ? "CRITICAL" : "LOW",
+      risk: scoreVal >= 0.8 ? "LOW" : scoreVal >= 0.5 ? "MEDIUM" : "HIGH",
     };
-  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 5);
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 6);
 
   // Map compliance alerts to SLA table format
   const slaTableData = slaAlerts.map((a, i) => ({

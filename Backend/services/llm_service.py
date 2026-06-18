@@ -213,6 +213,33 @@ class LLMClient:
                 return chain.invoke(input_vars)
 
             except Exception as exc:
+                # --- Salvage Markdown-Wrapped JSON ---
+                # DeepSeek/OpenAI sometimes ignores tool constraints and returns Markdown.
+                import pydantic
+                raw_input = None
+                
+                if isinstance(exc, pydantic.ValidationError):
+                    for err in exc.errors():
+                        if err.get("type") == "json_invalid":
+                            raw_input = err.get("input")
+                            break
+                            
+                if raw_input and isinstance(raw_input, str) and "```" in raw_input:
+                    cleaned = raw_input.strip()
+                    if cleaned.startswith("```json"):
+                        cleaned = cleaned[7:]
+                    elif cleaned.startswith("```"):
+                        cleaned = cleaned[3:]
+                    if cleaned.endswith("```"):
+                        cleaned = cleaned[:-3]
+                    try:
+                        res = output_schema.model_validate_json(cleaned.strip())
+                        logger.info("Successfully salvaged structured output from markdown code blocks.")
+                        return res
+                    except Exception as salvage_exc:
+                        logger.warning("Attempted to salvage markdown JSON but failed: %s", salvage_exc)
+                # -------------------------------------
+
                 error_str = str(exc).lower()
                 is_quota = (
                     "429" in error_str
@@ -510,6 +537,7 @@ def extraction_agent_node(state: SLAExtractionState) -> SLAExtractionState:
         "You are an expert legal data extraction AI. "
         "Extract the exact financial and logistical parameters from "
         "the contract using the provided tool schema.\n\n"
+        "IMPORTANT: You MUST output ONLY valid JSON. Do not use ```json or any markdown formatting. Just the raw JSON object.\n\n"
         "### PREVIOUS BUSINESS LOGIC ERRORS TO FIX ###\n{error_message}"
     )
 

@@ -78,15 +78,15 @@ def get_risk_scores() -> list[dict]:
         sup_name = row.get("supplierName", "Unknown")
         
         if mat_name in seen_materials:
-            # We already added this material as RED. Enrich it if we have extra data from the supplier query.
+            # Enrich ONLY the matching supplier entry (match by both material AND supplier name)
             for rs in risk_scores:
-                if rs["material"] == mat_name:
-                    if rs["supplier"] == "Unknown" and sup_name != "Unknown":
-                        rs["supplier"] = sup_name
-                        rs["supplierLabel"] = sup_name
-                    if not rs["reliabilityScore"]: rs["reliabilityScore"] = row.get("reliabilityScore")
-                    if not rs["leadTime"]: rs["leadTime"] = row.get("leadTimeDays")
-                    if not rs["country"]: rs["country"] = row.get("country")
+                if rs["material"] == mat_name and rs["supplierLabel"] == sup_name:
+                    if not rs["reliabilityScore"]:
+                        rs["reliabilityScore"] = row.get("reliabilityScore")
+                    if not rs["leadTime"]:
+                        rs["leadTime"] = row.get("leadTimeDays")
+                    if not rs["country"]:
+                        rs["country"] = row.get("country")
             continue
             
         risk_scores.append({
@@ -135,8 +135,9 @@ def get_compliance_alerts() -> list[dict]:
         OPTIONAL {{ ?supplier :riskLevel ?riskLevel . }}
         OPTIONAL {{ ?supplier :penaltyRatePerDay ?penaltyRate . }}
         OPTIONAL {{ ?supplier :clause ?clause . }}
+        OPTIONAL {{ ?supplier :createdAt ?createdAt . }}
     }}
-    ORDER BY ?supplierName
+    ORDER BY ?createdAt ?supplierName
     """
     rows = graphdb.execute_sparql_select(query)
     
@@ -220,12 +221,23 @@ def get_fallback_options(material_id: str) -> list[dict]:
     safe_material = _sanitize_uri_fragment(material_id)
     # Relaxed query to find ANY supplier to ensure the fallback list is never empty,
     # as many ontologies do not define specific :AlternativeSupplier relationships.
+    material_escaped = material_id.replace('"', '\\"')
     query = f"""
     {PREFIXES}
     SELECT DISTINCT ?supplier ?supplierName ?reliabilityScore ?leadTimeDays ?country
     WHERE {{
         ?supplier rdf:type ?type .
         FILTER(?type IN (:Supplier, :AlternativeSupplier))
+        
+        # Find the material by exact label or sanitized URI
+        ?mat rdf:type :RawMaterial .
+        OPTIONAL {{ ?mat rdfs:label ?matLabel . }}
+        FILTER(STR(?matLabel) = "{material_escaped}" || REPLACE(STR(?mat), "^.*#", "") = "{safe_material}")
+        
+        # MUST supply the specific material
+        {{ ?supplier :supplies ?mat . }}
+        UNION
+        {{ ?mat :isSuppliedBy ?supplier . }}
         
         OPTIONAL {{ ?supplier rdfs:label ?label . }}
         OPTIONAL {{ ?supplier :hasName ?name . }}
@@ -253,41 +265,80 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     """
     Persist a fallback assignment in the Knowledge Graph by inserting
     an RDF triple linking the alternate supplier to the material.
+    Uses label-based lookup to avoid SPARQL syntax errors from special chars in names.
     """
-    material_uri = _sanitize_uri_fragment(material_name)
-    supplier_uri = _sanitize_uri_fragment(supplier_name)
-    
-    # Optional: we can place this in the CONTRACT_GRAPH or default graph.
-    # We will use the default graph for simplicity here, or CONTRACT_GRAPH.
     from knowledge_base.repository import CONTRACT_GRAPH
-    
-    sparql_update = f"""
+
+    mat_esc = material_name.replace('"', '\\"')
+    sup_esc = supplier_name.replace('"', '\\"')
+    safe_mat = _sanitize_uri_fragment(material_name)
+    safe_sup = _sanitize_uri_fragment(supplier_name)
+
+    # Step 1: look up the actual material + supplier + delivery URIs by label
+    lookup_q = f"""
     {PREFIXES}
-    DELETE {{
-        ?oldSupplier :supplies :{material_uri} .
-        ?delivery :hasDeliveryStatus "Delayed" .
-    }}
-    INSERT {{
-        GRAPH <{CONTRACT_GRAPH}> {{
-            :{supplier_uri} rdf:type :Supplier ;
-                            :supplies :{material_uri} ;
-                            :hasAssignmentType "{assignment_type}" .
-        }}
-        ?delivery :hasDeliveryStatus "Resolved" .
-    }}
-    WHERE {{
+    SELECT ?mat ?sup ?delivery WHERE {{
         OPTIONAL {{
-            ?oldSupplier :supplies :{material_uri} .
+            ?mat rdf:type :RawMaterial .
+            OPTIONAL {{ ?mat rdfs:label ?ml . }}
+            FILTER(STR(?ml) = "{mat_esc}" || REPLACE(STR(?mat), "^.*#", "") = "{safe_mat}")
+        }}
+        OPTIONAL {{
+            ?sup rdf:type ?st .
+            FILTER(?st IN (:Supplier, :AlternativeSupplier))
+            OPTIONAL {{ ?sup rdfs:label ?sl . }}
+            FILTER(STR(?sl) = "{sup_esc}" || REPLACE(STR(?sup), "^.*#", "") = "{safe_sup}")
         }}
         OPTIONAL {{
             ?delivery rdf:type :DeliveryEvent ;
-                      :transports :{material_uri} ;
                       :hasDeliveryStatus "Delayed" .
+            OPTIONAL {{ ?mat rdf:type :RawMaterial . }}
+            ?delivery :transports ?mat .
+            OPTIONAL {{ ?mat rdfs:label ?ml2 . }}
+            FILTER(STR(?ml2) = "{mat_esc}" || REPLACE(STR(?mat), "^.*#", "") = "{safe_mat}")
+        }}
+    }} LIMIT 1
+    """
+    rows = graphdb.execute_sparql_select(lookup_q)
+    mat_uri_full = rows[0].get("mat") if rows else None
+    sup_uri_full = rows[0].get("sup") if rows else None
+    delivery_uri_full = rows[0].get("delivery") if rows else None
+
+    mat_ref = f"<{mat_uri_full}>" if mat_uri_full else f":{safe_mat}"
+    sup_ref = f"<{sup_uri_full}>" if sup_uri_full else f":{safe_sup}"
+
+    # Step 2: Insert the new supplier assignment
+    insert_q = f"""
+    {PREFIXES}
+    INSERT DATA {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            {sup_ref} rdf:type :Supplier ;
+                      :supplies {mat_ref} ;
+                      :hasAssignmentType "{assignment_type}" .
         }}
     }}
     """
-    graphdb.execute_sparql_update(sparql_update)
-    
+    graphdb.execute_sparql_update(insert_q)
+
+    # Step 3: Update the delivery status in whatever graph it lives in
+    if delivery_uri_full:
+        # Use the exact delivery URI for a graph-agnostic update
+        status_q = f"""
+    {PREFIXES}
+    DELETE {{
+        GRAPH ?g {{ <{delivery_uri_full}> :hasDeliveryStatus "Delayed" . }}
+    }}
+    INSERT {{
+        GRAPH ?g {{ <{delivery_uri_full}> :hasDeliveryStatus "Resolved" . }}
+    }}
+    WHERE {{
+        GRAPH ?g {{
+            <{delivery_uri_full}> :hasDeliveryStatus "Delayed" .
+        }}
+    }}
+        """
+        graphdb.execute_sparql_update(status_q)
+
     return {
         "status": "success",
         "material": material_name,

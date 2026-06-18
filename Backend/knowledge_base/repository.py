@@ -17,6 +17,7 @@
 # ╚══════════════════════════════════════════════════════════╝
 # ============================================================
 
+from datetime import datetime
 from knowledge_base.connection import graphdb
 from models.schemas import SLAContract
 
@@ -94,6 +95,8 @@ def create_contract_graph(contract: SLAContract) -> dict:
     safe_supplier_name = str(contract.supplier_name or "").replace('"', '\\"').replace("\n", " ")
     safe_material = str(contract.material or "").replace('"', '\\"').replace("\n", " ")
 
+    timestamp = datetime.utcnow().isoformat() + "Z"
+
     # ---- SPARQL UPDATE query ----
     # We use INSERT DATA to add triples into the contracts
     # Named Graph.  All URIs use the ontology namespace (:)
@@ -107,7 +110,8 @@ def create_contract_graph(contract: SLAContract) -> dict:
             # ── Supplier individual ──
             :{supplier_uri}  rdf:type       :Supplier ;
                              rdfs:label     "{safe_supplier_name}" ;
-                             :hasReliabilityScore  "0.5"^^xsd:float .
+                             :hasReliabilityScore  "0.5"^^xsd:float ;
+                             :createdAt     "{timestamp}"^^xsd:dateTime .
 
             # ── RawMaterial individual ──
             :{material_uri}  rdf:type       :RawMaterial ;
@@ -160,11 +164,13 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
         
         OPTIONAL {{ ?delivery :hasDelayDuration ?delayHours . }}
         
-        # ── Find what supplier provides that material ──
+        # ── Find what PRIMARY supplier provides that material (exclude alternatives) ──
         OPTIONAL {{
             {{ ?supplier :supplies ?material . }}
             UNION
             {{ ?material :isSuppliedBy ?supplier . }}
+            # Only primary suppliers, not alternatives
+            FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
             OPTIONAL {{
                 ?supplier rdfs:label ?sLabel .
             }}
