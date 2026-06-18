@@ -33,6 +33,7 @@ def get_risk_scores() -> list[dict]:
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
+        FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
         ?material rdf:type :RawMaterial .
         OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
         OPTIONAL {{ ?supplier :hasName ?sName . }}
@@ -118,6 +119,7 @@ def get_compliance_alerts() -> list[dict]:
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
+        FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
         ?material rdf:type :RawMaterial .
 
         OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
@@ -219,26 +221,31 @@ def get_impacted_products() -> list[dict]:
 
 def get_fallback_options(material_id: str) -> list[dict]:
     safe_material = _sanitize_uri_fragment(material_id)
-    # Relaxed query to find ANY supplier to ensure the fallback list is never empty,
-    # as many ontologies do not define specific :AlternativeSupplier relationships.
     material_escaped = material_id.replace('"', '\\"')
+    # IMPORTANT: Only return :AlternativeSupplier nodes.
+    # Filtering to this type ensures:
+    #   (a) The currently-delayed primary supplier never appears in the list.
+    #   (b) Suppliers promoted via previous assignments don't bleed across materials.
     query = f"""
     {PREFIXES}
     SELECT DISTINCT ?supplier ?supplierName ?reliabilityScore ?leadTimeDays ?country
     WHERE {{
-        ?supplier rdf:type ?type .
-        FILTER(?type IN (:Supplier, :AlternativeSupplier))
-        
-        # Find the material by exact label or sanitized URI
+        # Only genuine alternative suppliers — never the broken primary
+        ?supplier rdf:type :AlternativeSupplier .
+
+        # Find the material by exact label or sanitized URI fragment
         ?mat rdf:type :RawMaterial .
         OPTIONAL {{ ?mat rdfs:label ?matLabel . }}
-        FILTER(STR(?matLabel) = "{material_escaped}" || REPLACE(STR(?mat), "^.*#", "") = "{safe_material}")
-        
-        # MUST supply the specific material
+        FILTER(
+            STR(?matLabel) = "{material_escaped}"
+            || REPLACE(STR(?mat), "^.*#", "") = "{safe_material}"
+        )
+
+        # The alternative supplier MUST be linked to this material
         {{ ?supplier :supplies ?mat . }}
         UNION
         {{ ?mat :isSuppliedBy ?supplier . }}
-        
+
         OPTIONAL {{ ?supplier rdfs:label ?label . }}
         OPTIONAL {{ ?supplier :hasName ?name . }}
         BIND(COALESCE(?label, ?name, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
@@ -249,7 +256,7 @@ def get_fallback_options(material_id: str) -> list[dict]:
     ORDER BY DESC(?reliabilityScore)
     """
     rows = graphdb.execute_sparql_select(query)
-    
+
     options = []
     for row in rows:
         options.append({
@@ -307,13 +314,15 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     mat_ref = f"<{mat_uri_full}>" if mat_uri_full else f":{safe_mat}"
     sup_ref = f"<{sup_uri_full}>" if sup_uri_full else f":{safe_sup}"
 
-    # Step 2: Insert the new supplier assignment
+    # Step 2: Record the assignment — deliberately do NOT add rdf:type :Supplier.
+    # Adding :Supplier to an AlternativeSupplier node pollutes the primary-supplier
+    # queries (get_risk_scores, get_compliance_alerts) and causes alternatives to
+    # appear as primary suppliers with a GREEN status, hiding the real delayed ones.
     insert_q = f"""
     {PREFIXES}
     INSERT DATA {{
         GRAPH <{CONTRACT_GRAPH}> {{
-            {sup_ref} rdf:type :Supplier ;
-                      :supplies {mat_ref} ;
+            {sup_ref} :supplies {mat_ref} ;
                       :hasAssignmentType "{assignment_type}" .
         }}
     }}

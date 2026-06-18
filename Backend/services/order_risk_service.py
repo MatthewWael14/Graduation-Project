@@ -300,10 +300,76 @@ def predict_order_risk(request: OrderRiskPredictionRequest) -> OrderRiskPredicti
 
     logger.info("Order risk predicted successfully: On-Time Prob = %.2f%% | Risk Level = %s", on_time_prob * 100, risk_level)
 
+    # ── Bridge: If HIGH risk, inject a Delayed DeliveryEvent into GraphDB ──────
+    # This connects the ML prediction to the dashboard's at-risk panel and
+    # fallback supplier workflow automatically.
+    if risk_level == "High" and estimated_delay > 0:
+        try:
+            _inject_high_risk_delay(request.supplier_id, request.material_id, estimated_delay, on_time_prob)
+        except Exception as exc:
+            logger.warning("ML→GraphDB bridge injection failed (non-critical): %s", exc)
+
     return OrderRiskPredictionResponse(
         status="success",
         on_time_probability=on_time_prob,
         risk_level=risk_level,
         estimated_delay_hours=estimated_delay,
         features_used=explainability_data
+    )
+
+
+def _inject_high_risk_delay(supplier_id: str, material_id: str, delay_hours: int, probability: float) -> None:
+    """
+    Injects a Delayed DeliveryEvent into GraphDB when the ML model predicts High risk.
+    This bridges the order risk predictor to the dashboard's at-risk / fallback workflow.
+    """
+    import time as _time
+    sup_uri = _sanitize_uri_fragment(supplier_id)
+    mat_uri = _sanitize_uri_fragment(material_id)
+    # Unique delivery URI based on supplier+material+timestamp to avoid duplicates
+    delivery_uri = f"MLRisk_{sup_uri}_{mat_uri}_{int(_time.time())}"
+
+    # First, look up the real material node URI (it might have spaces or special chars)
+    mat_esc = material_id.replace('"', '\\"')
+    lookup_q = f"""{PREFIXES}
+    SELECT ?mat ?process WHERE {{
+        ?mat rdf:type :RawMaterial .
+        OPTIONAL {{ ?mat rdfs:label ?ml . }}
+        FILTER(STR(?ml) = "{mat_esc}" || REPLACE(STR(?mat), "^.*#", "") = "{mat_uri}")
+        OPTIONAL {{
+            ?mat :affectsProcess ?process .
+            ?process rdf:type :ProductionProcess .
+        }}
+    }} LIMIT 1
+    """
+    rows = graphdb.execute_sparql_select(lookup_q)
+    if rows:
+        mat_ref = f"<{rows[0]['mat']}>" if rows[0].get("mat") else f":{mat_uri}"
+        proc_ref = f"<{rows[0]['process']}>" if rows[0].get("process") else None
+    else:
+        mat_ref = f":{mat_uri}"
+        proc_ref = None
+
+    # Build the INSERT: create a delivery event and mark it delayed
+    proc_triple = f"\n            {proc_ref} rdf:type :ProductionDisruption ." if proc_ref else ""
+
+    insert_q = f"""
+    PREFIX : <http://example.org/ontology#>
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    INSERT DATA {{
+        GRAPH <http://example.org/contracts/> {{
+            :{delivery_uri} rdf:type :DeliveryEvent ;
+                            :transports {mat_ref} ;
+                            :hasDeliveryStatus "Delayed"^^xsd:string ;
+                            :hasDelayDuration {delay_hours} ;
+                            :hasRiskSource "ML_OrderRisk"^^xsd:string ;
+                            :hasProbability "{probability:.4f}"^^xsd:float .{proc_triple}
+        }}
+    }}
+    """
+    graphdb.execute_sparql_update(insert_q)
+    logger.info(
+        "ML→GraphDB: Injected High-Risk delay event :%s for material %s (delay=%dh, prob=%.0f%%)",
+        delivery_uri, material_id, delay_hours, probability * 100
     )
