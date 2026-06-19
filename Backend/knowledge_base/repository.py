@@ -98,19 +98,24 @@ def create_contract_graph(contract: SLAContract) -> dict:
     timestamp = datetime.utcnow().isoformat() + "Z"
 
     # ---- SPARQL UPDATE query ----
-    # We use INSERT DATA to add triples into the contracts
-    # Named Graph.  All URIs use the ontology namespace (:)
-    # to satisfy Golden Rule #2 (Namespace Consistency).
+    # We use a DELETE/INSERT/WHERE pattern to update the contracts
+    # Named Graph, avoiding duplicate triples for functional properties.
+    # All URIs use the ontology namespace (:) to satisfy Golden Rule #2 (Namespace Consistency).
     sparql_update = f"""
     {PREFIXES}
 
-    INSERT DATA {{
+    DELETE {{
         GRAPH <{CONTRACT_GRAPH}> {{
-
+            :{supplier_uri} :leadTimeDays ?oldLeadTime .
+            :{supplier_uri} :penaltyClause ?oldPenalty .
+            :{supplier_uri} :hasReliabilityScore ?oldScore .
+        }}
+    }}
+    INSERT {{
+        GRAPH <{CONTRACT_GRAPH}> {{
             # ── Supplier individual ──
             :{supplier_uri}  rdf:type       :Supplier ;
                              rdfs:label     "{safe_supplier_name}" ;
-                             :hasReliabilityScore  "0.5"^^xsd:float ;
                              :createdAt     "{timestamp}"^^xsd:dateTime .
 
             # ── RawMaterial individual ──
@@ -121,9 +126,30 @@ def create_contract_graph(contract: SLAContract) -> dict:
             :{supplier_uri}  :supplies      :{material_uri} .
 
             # ── SLA Properties on the Supplier ──
-            :{supplier_uri}  :leadTimeDays  {lead_days} .
-            :{supplier_uri}  :penaltyClause "{raw_penalty}" .
+            :{supplier_uri}  :leadTimeDays  {lead_days} ;
+                             :penaltyClause "{raw_penalty}" .
+
+            # ── Preserved or Default Reliability Score ──
+            :{supplier_uri}  :hasReliabilityScore ?finalScore .
         }}
+    }}
+    WHERE {{
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{supplier_uri} :leadTimeDays ?oldLeadTime .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{supplier_uri} :penaltyClause ?oldPenalty .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{supplier_uri} :hasReliabilityScore ?oldScore .
+            }}
+        }}
+        BIND(COALESCE(?oldScore, "0.5"^^xsd:float) AS ?finalScore)
     }}
     """
 

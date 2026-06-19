@@ -56,18 +56,18 @@ export default function SLAViolations({ user }) {
   useEffect(() => {
     fetchComplianceAlerts()
       .then(alerts => {
-        // Map backend response → display format
         const mapped = (alerts || []).map((a, i) => ({
           id: a.id || `SLA-${String(i + 1).padStart(3, "0")}`,
           supplier: a.supplier || a.supplierLabel || "—",
           material: a.material || a.materialLabel || "—",
           deadline: a.deadline || "—",
           compliance: a.compliance !== undefined ? a.compliance : null,
-          risk: a.risk || (a.delayDays > 0 ? "HIGH" : "LOW"),
+          risk: a.risk || "LOW",
           penalty: a.penalty || (a.penaltyRate ? `$${a.penaltyRate}/day` : "—"),
           penaltyDaily: a.penaltyRate || 0,
-          delayDays: a.delayDays || a.leadTimeDays || 0,
-          violationStatus: a.violationStatus || a.delayDays > 0 || false,
+          leadTimeDays: a.leadTimeDays !== undefined ? a.leadTimeDays : 0,
+          delayDays: a.delayDays || 0,
+          violationStatus: a.violationStatus || false,
           gracePeriod: a.gracePeriod || "48h",
           clause: a.clause || "—",
         }));
@@ -79,7 +79,6 @@ export default function SLAViolations({ user }) {
 
   const handleCalcPenalty = async (sla) => {
     setSelected(sla.id); setCalcLoading(true); setPenalty(null);
-    // Local calculation using the fields we have
     const graceDays = 2;
     const billableDays = Math.max(0, (sla.delayDays || 0) - graceDays);
     await new Promise(r => setTimeout(r, 300));

@@ -16,9 +16,9 @@ const SUGGESTIONS = [
 ];
 
 export default function ChatAssistant({ user }) {
-  const [messages,      setMessages]      = useState([INITIAL_MESSAGE]);
-  const [input,         setInput]         = useState("");
-  const [loading,       setLoading]       = useState(false);
+  const [messages, setMessages] = useState([INITIAL_MESSAGE]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const bottomRef = useRef(null);
 
@@ -95,7 +95,7 @@ export default function ChatAssistant({ user }) {
                   ))}
                   {m.sparql && (
                     <div style={{ marginTop: 12 }}>
-                      <button 
+                      <button
                         style={{ ...S.btn("ghost"), fontSize: 11, padding: "4px 8px", background: "rgba(255,255,255,0.1)", color: C.accent }}
                         onClick={() => {
                           setMessages(p => p.map((msg, idx) => idx === i ? { ...msg, showSparql: !msg.showSparql } : msg));

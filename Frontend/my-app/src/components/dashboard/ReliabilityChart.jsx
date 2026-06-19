@@ -23,7 +23,11 @@ export default function ReliabilityChart({ suppliers }) {
                 <span style={{ fontSize: 14, fontWeight: 500, color: C.text }}>{s.name}</span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={S.riskBadge(s.risk)}>{s.risk}</span>
+                <span style={{
+                  display: "inline-block", padding: "3px 10px", borderRadius: 20,
+                  fontSize: 12, fontWeight: 600, background: barColor + "22", color: barColor,
+                  border: `1px solid ${barColor}33`,
+                }}>{s.score >= 80 ? "HIGH" : s.score >= 50 ? "MEDIUM" : "LOW"}</span>
                 <span style={{ fontSize: 15, fontWeight: 700, color: barColor }}>{s.score}</span>
               </div>
             </div>

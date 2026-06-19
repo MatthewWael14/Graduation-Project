@@ -7,10 +7,10 @@
 # ============================================================
 
 import logging
+import time
 
 from knowledge_base.connection import graphdb
 from knowledge_base.repository import (
-    PREFIXES,
     PREFIXES,
     _sanitize_uri_fragment,
     find_impacted_products_by_supplier_delay,
@@ -19,14 +19,36 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+# ── Simple in-process TTL cache for the heavy impacted-products query ──────────
+# This query takes ~7 seconds and is called 3 times per dashboard page load
+# (get_risk_scores, get_compliance_alerts, get_kpis). Caching it for 30 seconds
+# drops total load time from ~21s to ~7s on first load and ~0s on repeat loads.
+_impacted_cache: list[dict] | None = None
+_impacted_cache_ts: float = 0.0
+_IMPACTED_CACHE_TTL = 30  # seconds
+
+
+def _get_impacted_cached() -> list[dict]:
+    """Return cached impacted-products result, refreshing if older than TTL."""
+    global _impacted_cache, _impacted_cache_ts
+    if _impacted_cache is None or (time.time() - _impacted_cache_ts) > _IMPACTED_CACHE_TTL:
+        logger.debug("[cache MISS] Refreshing impacted products from GraphDB ...")
+        _impacted_cache = find_impacted_products_by_supplier_delay()
+        _impacted_cache_ts = time.time()
+    else:
+        logger.debug("[cache HIT]  Serving impacted products from cache.")
+    return _impacted_cache
+
+
 
 def get_risk_scores() -> list[dict]:
     """
     Returns risk scores including reliabilityScore so Suppliers page bars render.
     """
-    impacted = find_impacted_products_by_supplier_delay()
+    impacted = _get_impacted_cached()
     
     # Also query all suppliers with their reliability scores, lead times, and countries
+    # NOTE: We omit `?material rdf:type :RawMaterial` to avoid Cartesian product explosion under OWL inference.
     q_all = f"""
     {PREFIXES}
     SELECT DISTINCT ?supplierName ?materialName ?productName ?reliabilityScore ?leadTimeDays ?country
@@ -34,7 +56,6 @@ def get_risk_scores() -> list[dict]:
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
         FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
-        ?material rdf:type :RawMaterial .
         OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
         OPTIONAL {{ ?supplier :hasName ?sName . }}
         BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
@@ -112,15 +133,18 @@ def get_compliance_alerts() -> list[dict]:
     Returns enriched SLA data including compliance %, deadline, risk level,
     numeric penaltyRate and clause so the SLA Violations page renders fully.
     """
+    # NOTE: We intentionally omit `?material rdf:type :RawMaterial` here.
+    # Under OWL inference mode that triple pattern expands to ALL inferred
+    # subclasses, turning 27 suppliers into 26,000+ rows (Cartesian product).
+    # The :supplies predicate already constrains the material type sufficiently.
     query = f"""
     {PREFIXES}
-    SELECT DISTINCT ?supplierName ?materialName ?leadTimeDays ?penalty
+    SELECT DISTINCT ?supplier ?supplierName ?materialName ?leadTimeDays ?penalty
                     ?reliabilityScore ?deliveryDeadline ?riskLevel ?penaltyRate ?clause
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
         FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
-        ?material rdf:type :RawMaterial .
 
         OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
         OPTIONAL {{ ?supplier :hasName ?sName . }}
@@ -140,17 +164,19 @@ def get_compliance_alerts() -> list[dict]:
         OPTIONAL {{ ?supplier :createdAt ?createdAt . }}
     }}
     ORDER BY ?createdAt ?supplierName
+    LIMIT 500
     """
     rows = graphdb.execute_sparql_select(query)
+
     
-    impacted = find_impacted_products_by_supplier_delay()
+    impacted = _get_impacted_cached()
     supplier_delay_map = {}
     for r in impacted:
         sup = r.get("supplierLabel", "")
         delay_hrs = float(r.get("delayHours", 0) or 0)
         if sup:
-            # Convert hours to days, fallback to 1 if delayed but no hours found
-            supplier_delay_map[sup] = int(delay_hrs / 24) if delay_hrs > 0 else 1
+            days = int(delay_hrs / 24) if delay_hrs > 0 else 1
+            supplier_delay_map[sup] = max(supplier_delay_map.get(sup, 0), days)
 
     alerts = []
     for row in rows:
@@ -216,7 +242,7 @@ def get_compliance_alerts() -> list[dict]:
 
 
 def get_impacted_products() -> list[dict]:
-    return find_impacted_products_by_supplier_delay()
+    return _get_impacted_cached()
 
 
 def get_fallback_options(material_id: str) -> list[dict]:
@@ -373,7 +399,7 @@ def get_kpis() -> dict:
     active_suppliers = int(rows_sup[0].get("count", 0)) if rows_sup else 0
 
     # Count at-risk materials based on actual delayed deliveries
-    impacted = find_impacted_products_by_supplier_delay()
+    impacted = _get_impacted_cached()
     at_risk_shipments = len(set(r.get("materialLabel") for r in impacted if r.get("materialLabel")))
 
     # Average lead time across all suppliers (proxy for avg delay)

@@ -1,4 +1,4 @@
-# =====================================================================
+ # =====================================================================
 # services/order_risk_service.py — Layer 2: Order Risk Assessment
 #
 # Predicts delay risks for proposed Purchase Orders before they are placed.
@@ -27,7 +27,9 @@ _FEATURES = None
 def _load_ml_assets():
     """Lazy-loads and caches model, scaler, and feature lists."""
     global _MODEL, _SCALER, _FEATURES
-    if _MODEL is None:
+    logger.info("Inside _load_ml_assets: _MODEL=%s, _SCALER=%s, _FEATURES=%s",
+                _MODEL is not None, _SCALER is not None, _FEATURES is not None)
+    if _MODEL is None or _SCALER is None or _FEATURES is None:
         dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         assets_dir = os.path.join(dir_path, "models", "ml_assets")
         
@@ -36,12 +38,24 @@ def _load_ml_assets():
         features_path = os.path.join(assets_dir, "model_features.json")
         
         logger.info("Loading ML assets from: %s", assets_dir)
-        with open(model_path, "rb") as f:
-            _MODEL = pickle.load(f)
-        with open(scaler_path, "rb") as f:
-            _SCALER = pickle.load(f)
-        with open(features_path, "r") as f:
-            _FEATURES = json.load(f)
+        try:
+            with open(model_path, "rb") as f:
+                model = pickle.load(f)
+            logger.info("Loaded model successfully")
+            with open(scaler_path, "rb") as f:
+                scaler = pickle.load(f)
+            logger.info("Loaded scaler successfully")
+            with open(features_path, "r") as f:
+                features = json.load(f)
+            logger.info("Loaded features successfully, count=%d", len(features) if features else 0)
+            
+            _MODEL = model
+            _SCALER = scaler
+            _FEATURES = features
+            logger.info("Assigned global variables successfully: _FEATURES is None: %s", _FEATURES is None)
+        except Exception as e:
+            logger.error("Failed to load ML assets: %s", e)
+            raise e
 
 def _get_sparql_ref(uri_or_id: str) -> str:
     """Format a string ID to be a safe SPARQL URI reference."""
@@ -316,6 +330,8 @@ def predict_order_risk(request: OrderRiskPredictionRequest) -> OrderRiskPredicti
         estimated_delay_hours=estimated_delay,
         features_used=explainability_data
     )
+
+# Force reload triggers (asset update verification)
 
 
 def _inject_high_risk_delay(supplier_id: str, material_id: str, delay_hours: int, probability: float) -> None:
