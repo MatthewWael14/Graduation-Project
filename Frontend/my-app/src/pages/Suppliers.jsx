@@ -35,13 +35,23 @@ function SupplierModal({ supplier, onClose }) {
         </div>
 
         <div style={{ padding: "16px 22px" }}>
-          {/* All fields from backend */}
-          {Object.entries(s).filter(([k]) => !["__type"].includes(k)).map(([k, v], i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}22`, fontSize: 13 }}>
-              <span style={{ color: C.muted, textTransform: "capitalize" }}>{k.replace(/([A-Z])/g, " $1")}</span>
-              <span style={{ color: C.text, fontWeight: 500, maxWidth: "60%", textAlign: "right", wordBreak: "break-word" }}>{String(v)}</span>
-            </div>
-          ))}
+          {(() => {
+            const seen = new Set();
+            return Object.entries(s)
+              .filter(([k]) => !["__type", "status"].includes(k)) // hide status too, it's in the top row
+              .map(([k, v]) => {
+                const formattedKey = k.replace(/([A-Z])/g, " $1").replace(/ Label| Name/gi, "").trim();
+                const keyLower = formattedKey.toLowerCase();
+                if (seen.has(keyLower)) return null;
+                seen.add(keyLower);
+                return (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${C.border}22`, fontSize: 13 }}>
+                    <span style={{ color: C.muted, textTransform: "capitalize" }}>{formattedKey}</span>
+                    <span style={{ color: C.text, fontWeight: 500, maxWidth: "60%", textAlign: "right", wordBreak: "break-word" }}>{String(v)}</span>
+                  </div>
+                );
+              }).filter(Boolean);
+          })()}
         </div>
       </div>
     </div>
@@ -299,7 +309,8 @@ export default function Suppliers({ user }) {
               const color = isRed ? C.red : C.green;
               const name = s.supplier || s.supplierLabel || s.supplierName || `Supplier ${i + 1}`;
               const material = s.material || s.materialLabel || "—";
-              const process = s.product || s.productLabel || s.processLabel || "";
+              const process = s.process || s.processLabel || "";
+              const product = s.product || s.productLabel || "";
               const score = s.reliabilityScore ? `${(parseFloat(s.reliabilityScore) * 100).toFixed(0)}%` : "—";
 
               return (
@@ -314,7 +325,10 @@ export default function Suppliers({ user }) {
                     <span style={S.riskBadge(isRed ? "HIGH" : "LOW")}>{s.status}</span>
                   </div>
                   {process && (
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Process: {process}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: product ? 2 : 8 }}>Process: {process}</div>
+                  )}
+                  {product && (
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Product: {product}</div>
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                     <div style={{ fontSize: 11, color: C.muted }}>Reliability</div>

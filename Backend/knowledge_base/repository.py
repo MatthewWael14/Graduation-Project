@@ -180,7 +180,7 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
     sparql_query = f"""
     {PREFIXES}
 
-    SELECT DISTINCT ?supplierLabel ?materialLabel ?productLabel ?riskStatus ?delayHours
+    SELECT DISTINCT ?supplierLabel ?materialLabel ?processLabel ?productLabel ?riskStatus ?delayHours
     WHERE {{
         # ── Find delayed deliveries and their transported material ──
         ?delivery  rdf:type     :DeliveryEvent ;
@@ -217,13 +217,22 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
         OPTIONAL {{
             ?process rdfs:label ?pLabel .
         }}
-        BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?productLabel)
+        BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processLabel)
+
+        # ── Find the product produced by the process ──
+        OPTIONAL {{
+            ?process :producesProduct ?product .
+            OPTIONAL {{
+                ?product rdfs:label ?prodLabel .
+            }}
+        }}
+        BIND(COALESCE(?prodLabel, REPLACE(STR(?product), "^.*#", "")) AS ?productLabel)
 
         # ── Check if the process is inferred as a ProductionDisruption (at risk) ──
         ?process   rdf:type     :ProductionDisruption .
         BIND("true" AS ?riskStatus)
     }}
-    ORDER BY ?productLabel
+    ORDER BY ?processLabel
     """
 
     return graphdb.execute_sparql_select(sparql_query)

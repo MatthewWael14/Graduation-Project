@@ -51,7 +51,7 @@ def get_risk_scores() -> list[dict]:
     # NOTE: We omit `?material rdf:type :RawMaterial` to avoid Cartesian product explosion under OWL inference.
     q_all = f"""
     {PREFIXES}
-    SELECT DISTINCT ?supplierName ?materialName ?productName ?reliabilityScore ?leadTimeDays ?country
+    SELECT DISTINCT ?supplierName ?materialName ?processName ?productName ?reliabilityScore ?leadTimeDays ?country
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
@@ -64,7 +64,13 @@ def get_risk_scores() -> list[dict]:
         OPTIONAL {{
             ?material :affectsProcess ?process .
             OPTIONAL {{ ?process rdfs:label ?pLabel . }}
-            BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?productName)
+            BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processName)
+            
+            OPTIONAL {{
+                ?process :producesProduct ?product .
+                OPTIONAL {{ ?product rdfs:label ?prodLabel . }}
+            }}
+            BIND(COALESCE(?prodLabel, REPLACE(STR(?product), "^.*#", "")) AS ?productName)
         }}
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
         OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
@@ -85,6 +91,8 @@ def get_risk_scores() -> list[dict]:
             "materialLabel":    mat_name,
             "supplier":         sup_name,
             "supplierLabel":    sup_name,
+            "process":          r.get("processLabel", ""),
+            "processLabel":     r.get("processLabel", ""),
             "product":          r.get("productLabel", ""),
             "productLabel":     r.get("productLabel", ""),
             "status":           "RED",
@@ -116,6 +124,8 @@ def get_risk_scores() -> list[dict]:
             "materialLabel":    mat_name,
             "supplier":         sup_name,
             "supplierLabel":    sup_name,
+            "process":          row.get("processName", ""),
+            "processLabel":     row.get("processName", ""),
             "product":          row.get("productName", ""),
             "productLabel":     row.get("productName", ""),
             "status":           "GREEN",
