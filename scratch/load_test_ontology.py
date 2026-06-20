@@ -13,7 +13,7 @@ from knowledge_base.connection import graphdb
 
 # Configuration
 TEST_REPO = "SemanticDigitalTest"
-ontology_path = os.path.join(PROJECT_ROOT, "Data_Science", "ontology", ".rdf")
+ontology_path = os.path.join(PROJECT_ROOT, "Data_Science", "ontology", "test.rdf")
 
 ONTOLOGY_GRAPH = "http://example.org/ontology/"
 CONTRACT_GRAPH = "http://example.org/contracts/"
