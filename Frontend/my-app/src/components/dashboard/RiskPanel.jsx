@@ -11,11 +11,12 @@ export default function RiskPanel({ risks, onDrillDown }) {
         // Guard: if threshold is 0 (field not stored in KB), derive a visual % from status
         const hasStockData = r.threshold > 0;
         const pct = hasStockData
-          ? Math.min(100, (r.stock / r.threshold) * 100)
-          : r.trafficLight === "RED" ? 25 : 85;
-        const color = r.risk === "CRITICAL" ? C.red
-                    : r.risk === "HIGH"     ? C.orange
-                    : r.risk === "MEDIUM"   ? C.accent
+          ? (r.stock >= r.threshold ? 0 : Math.round(100 - (r.stock / r.threshold) * 100))
+          : r.trafficLight === "RED" ? 80 : 15;
+        const derivedRisk = pct >= 80 ? "CRITICAL" : pct >= 50 ? "HIGH" : pct >= 20 ? "MEDIUM" : "LOW";
+        const color = derivedRisk === "CRITICAL" ? C.red
+                    : derivedRisk === "HIGH"     ? C.orange
+                    : derivedRisk === "MEDIUM"   ? C.accent
                     : C.green;
         const pb = S.progressBar(pct, color);
         return (
@@ -27,7 +28,7 @@ export default function RiskPanel({ risks, onDrillDown }) {
               >
                 {r.material}
               </span>
-              <span style={S.riskBadge(r.risk)}>{r.risk}</span>
+              <span style={S.riskBadge(derivedRisk)}>{derivedRisk}</span>
             </div>
             <div style={{ fontSize: 13, color: C.muted, marginBottom: 6 }}>
               {r.impact}{r.delay > 0 ? ` · +${r.delay}d delay` : ""}
@@ -35,9 +36,9 @@ export default function RiskPanel({ risks, onDrillDown }) {
             <div style={pb.outer}><div style={pb.inner} /></div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
               <span style={{ fontSize: 12, color: C.muted }}>
-                {hasStockData ? `${r.stock} / ${r.threshold} units` : `Supplier: ${r.supplier}`}
+                Supplier: {r.supplier}
               </span>
-              <span style={{ fontSize: 12, color, fontWeight: 600 }}>{Math.round(pct)}%</span>
+              <span style={{ fontSize: 12, color, fontWeight: 600 }}>{Math.round(pct)}% Risk</span>
             </div>
           </div>
         );
