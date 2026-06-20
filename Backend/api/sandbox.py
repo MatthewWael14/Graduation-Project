@@ -319,7 +319,7 @@ async def place_purchase_order(request: OrderRiskPredictionRequest):
 async def handle_migrate_supplier_scores():
     """
     Migration endpoint to initialize missing reliability scores for all existing suppliers.
-    Assigns a default score of 0.5 to suppliers that don't have a score yet.
+    Assigns a default score of 0.75 to suppliers that don't have a score yet.
     """
     try:
         from knowledge_base import initialize_missing_supplier_scores

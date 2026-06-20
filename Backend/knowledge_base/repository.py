@@ -149,7 +149,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
                 :{supplier_uri} :hasReliabilityScore ?oldScore .
             }}
         }}
-        BIND(COALESCE(?oldScore, "0.5"^^xsd:float) AS ?finalScore)
+        BIND(COALESCE(?oldScore, "0.75"^^xsd:float) AS ?finalScore)
     }}
     """
 
@@ -299,7 +299,7 @@ def update_supplier_reliability_score(supplier_id: str, new_score: float) -> boo
 def initialize_missing_supplier_scores() -> dict:
     """
     Find all suppliers in GraphDB that don't have a hasReliabilityScore
-    and assign them a default score of 0.5.
+    and assign them a default score of 0.75.
     
     This is a migration function for existing suppliers that were created
     without a reliability score.
@@ -336,7 +336,7 @@ def initialize_missing_supplier_scores() -> dict:
             {PREFIXES}
             INSERT DATA {{
                 GRAPH <{CONTRACT_GRAPH}> {{
-                    {supplier_ref} :hasReliabilityScore "0.5"^^xsd:float .
+                    {supplier_ref} :hasReliabilityScore "0.75"^^xsd:float .
                 }}
             }}
             """

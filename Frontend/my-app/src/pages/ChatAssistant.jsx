@@ -17,14 +17,7 @@ const SUGGESTIONS = [
 
 export default function ChatAssistant({ user }) {
   const [messages, setMessages] = useState([INITIAL_MESSAGE]);
-  const [input, setInput] = useState(() => {
-    const prefill = localStorage.getItem("ai_context");
-    if (prefill) {
-      localStorage.removeItem("ai_context");
-      return prefill;
-    }
-    return "";
-  });
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const bottomRef = useRef(null);

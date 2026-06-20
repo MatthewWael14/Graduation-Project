@@ -52,6 +52,7 @@ export default function SLAViolations({ user }) {
   const [penalty, setPenalty] = useState(null);
   const [calcLoading, setCalcLoading] = useState(false);
   const [slaModal, setSlaModal] = useState(null);
+  const [filterSupplier, setFilterSupplier] = useState("ALL");
 
   useEffect(() => {
     fetchComplianceAlerts()
@@ -94,9 +95,10 @@ export default function SLAViolations({ user }) {
     setCalcLoading(false);
   };
 
-  const violations = slaList.filter(s => s.violationStatus);
+  const filteredSlaList = filterSupplier === "ALL" ? slaList : slaList.filter(s => s.supplier === filterSupplier);
+  const violations = filteredSlaList.filter(s => s.violationStatus);
   const totalOwed = violations.reduce((acc, s) => acc + ((s.penaltyDaily || 0) * Math.max(0, (s.delayDays || 0) - 2)), 0);
-  const validCompliances = slaList.filter(s => s.compliance !== null);
+  const validCompliances = filteredSlaList.filter(s => s.compliance !== null);
   const avgCompliance = validCompliances.length > 0
     ? Math.round(validCompliances.reduce((a, s) => a + (s.compliance || 0), 0) / validCompliances.length)
     : null;
@@ -105,15 +107,31 @@ export default function SLAViolations({ user }) {
     <div>
       {slaModal && <SLAModal sla={slaModal} onClose={() => setSlaModal(null)} />}
 
-      <div style={S.pageHeader}>
-        <div style={S.pageTitle}>SLA Violations · Compliance Monitor</div>
-        <div style={S.pageDesc}>Track supplier SLA breaches and penalties owed to your company</div>
+      <div style={{ ...S.pageHeader, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={S.pageTitle}>SLA Violations · Compliance Monitor</div>
+          <div style={S.pageDesc}>Track supplier SLA breaches and penalties owed to your company</div>
+        </div>
+        
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44` }}>
+          <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>Calculator Filter:</span>
+          <select 
+            value={filterSupplier}
+            onChange={e => setFilterSupplier(e.target.value)}
+            style={{ padding: "6px 12px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, outline: "none", cursor: "pointer" }}
+          >
+            <option value="ALL">All Suppliers</option>
+            {Array.from(new Set(slaList.map(v => v.supplier))).filter(Boolean).sort().map(sup => (
+              <option key={sup} value={sup}>{sup}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* KPIs — only show real numbers, dash if unknown */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "Total Contracts", value: loading ? "—" : slaList.length.toString(), color: C.blue },
+          { label: filterSupplier === "ALL" ? "Total Contracts" : "Supplier Contracts", value: loading ? "—" : filteredSlaList.length.toString(), color: C.blue },
           { label: "Active Breaches", value: loading ? "—" : violations.length.toString(), color: C.red },
           { label: "Avg Compliance", value: loading ? "—" : avgCompliance !== null ? `${avgCompliance}%` : "—", color: C.green },
           { label: "Total Penalties Owed", value: loading ? "—" : totalOwed > 0 ? `$${totalOwed.toLocaleString()}` : "$0", color: C.accent },
@@ -164,8 +182,8 @@ export default function SLAViolations({ user }) {
         <div style={S.grid2}>
           {/* Contract list */}
           <div style={S.card}>
-            <div style={{ ...S.cardTitle, marginBottom: 16 }}>📋 SLA Contract Status</div>
-            {slaList.map((s, i) => (
+            <div style={{ ...S.cardTitle, marginBottom: 16 }}>📋 SLA Contract Status {filterSupplier !== "ALL" && `(${filterSupplier})`}</div>
+            {filteredSlaList.map((s, i) => (
               <div key={i} className="data-row"
                 style={{ padding: "12px 0", borderBottom: `1px solid ${C.border}22`, background: selected === s.id ? "rgba(245,158,11,0.04)" : "transparent", transition: "background 0.15s" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>

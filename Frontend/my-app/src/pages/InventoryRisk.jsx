@@ -111,11 +111,7 @@ export default function InventoryRisk({ onNavigate }) {
           <div style={{ ...S.cardTitle, marginBottom: 12 }}>🔍 Detail — {products[selected].materialLabel || products[selected].material}</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={S.btn()} onClick={() => onNavigate("suppliers")}>🔄 Find Fallback Supplier</button>
-            <button style={S.btn("ghost")} onClick={() => {
-              const materialName = products[selected].materialLabel || products[selected].material;
-              localStorage.setItem("ai_context", `Regarding the material "${materialName}": `);
-              onNavigate("ai");
-            }}>🤖 Ask AI</button>
+            <button style={S.btn("ghost")} onClick={() => onNavigate("ai")}>🤖 Ask AI</button>
           </div>
         </div>
       )}
