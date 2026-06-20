@@ -24,8 +24,8 @@ function SLAModal({ sla, onClose }) {
             ["Risk Level", sla.risk || "—"],
             ["Penalty Rate", sla.penalty || "—"],
             ["Lead Time", sla.leadTimeDays !== undefined ? `${sla.leadTimeDays} days` : "—"],
-            ["Delay Days", sla.delayDays > 0 ? `${sla.delayDays} days overdue` : "On track"],
-            ["Status", sla.violationStatus ? "BREACHED — Penalty Active" : "COMPLIANT"],
+            ["Delay Days", sla.violationType === "LateDelivery" && sla.delayDays > 0 ? `${sla.delayDays} days overdue` : sla.violationType === "UnderShipment" ? "Quantity Shortage Breach" : sla.violationType === "DamagedGoods" ? "Quality Goods Breach" : "On track"],
+            ["Status", sla.violationStatus ? `BREACHED — Penalty Active ($${(sla.penaltyOwed || 0).toLocaleString()})` : "COMPLIANT"],
           ].map(([k, v], i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}22`, fontSize: 13 }}>
               <span style={{ color: C.muted }}>{k}</span>
@@ -53,6 +53,7 @@ export default function SLAViolations({ user }) {
   const [calcLoading, setCalcLoading] = useState(false);
   const [slaModal, setSlaModal] = useState(null);
   const [filterSupplier, setFilterSupplier] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     fetchComplianceAlerts()
@@ -71,6 +72,13 @@ export default function SLAViolations({ user }) {
           violationStatus: a.violationStatus || false,
           gracePeriod: a.gracePeriod || "48h",
           clause: a.clause || "—",
+          violationType: a.violationType || null,
+          penaltyOwed: a.penaltyOwed || 0,
+          orderedQty: a.orderedQty || null,
+          deliveredQty: a.deliveredQty || null,
+          totalCost: a.totalCost || null,
+          missedItemPenaltyRate: a.missedItemPenaltyRate || null,
+          qualityPenaltyRate: a.qualityPenaltyRate || null,
         }));
         setSlaList(mapped);
       })
@@ -80,28 +88,79 @@ export default function SLAViolations({ user }) {
 
   const handleCalcPenalty = async (sla) => {
     setSelected(sla.id); setCalcLoading(true); setPenalty(null);
-    const graceDays = 2;
-    const billableDays = Math.max(0, (sla.delayDays || 0) - graceDays);
     await new Promise(r => setTimeout(r, 300));
-    setPenalty({
-      slaId: sla.id,
-      delayDays: sla.delayDays || 0,
-      gracePeriodDays: graceDays,
-      billableDays,
-      dailyRate: sla.penaltyDaily || 0,
-      totalPenalty: billableDays * (sla.penaltyDaily || 0),
-      clause: sla.clause,
-    });
+    
+    if (sla.violationType === "UnderShipment") {
+      const ordered = sla.orderedQty || 100;
+      const delivered = sla.deliveredQty || 70;
+      const missed = Math.max(0, ordered - delivered);
+      const rate = sla.missedItemPenaltyRate || 50;
+      setPenalty({
+        slaId: sla.id,
+        type: "Under-Shipment",
+        orderedQty: ordered,
+        deliveredQty: delivered,
+        missedQty: missed,
+        rate,
+        totalPenalty: sla.penaltyOwed || (missed * rate),
+        clause: sla.clause && sla.clause !== "—" ? sla.clause : `Missed Item Penalty: $${rate}/unit`,
+      });
+    } else if (sla.violationType === "DamagedGoods") {
+      const cost = sla.totalCost || 5000;
+      const rate = sla.qualityPenaltyRate || 0.1;
+      setPenalty({
+        slaId: sla.id,
+        type: "Damaged Goods (Quality)",
+        totalCost: cost,
+        rate: Math.round(rate * 100),
+        totalPenalty: sla.penaltyOwed || (cost * rate),
+        clause: sla.clause && sla.clause !== "—" ? sla.clause : `Quality Penalty: ${Math.round(rate * 100)}% of PO Cost`,
+      });
+    } else {
+      // LateDelivery or default
+      const graceDays = 2;
+      const billableDays = Math.max(0, (sla.delayDays || 0) - graceDays);
+      const dailyRate = sla.penaltyDaily || 0;
+      setPenalty({
+        slaId: sla.id,
+        type: "Late Delivery",
+        delayDays: sla.delayDays || 0,
+        gracePeriodDays: graceDays,
+        billableDays,
+        dailyRate,
+        totalPenalty: sla.penaltyOwed || (billableDays * dailyRate),
+        clause: sla.clause,
+      });
+    }
     setCalcLoading(false);
   };
 
-  const filteredSlaList = filterSupplier === "ALL" ? slaList : slaList.filter(s => s.supplier === filterSupplier);
+  const filteredSlaList = slaList.filter(s => {
+    const matchesSupplier = filterSupplier === "ALL" || s.supplier === filterSupplier;
+    const matchesSearch = !searchQuery || 
+      (s.supplier || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.material || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.id || "").toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSupplier && matchesSearch;
+  });
   const violations = filteredSlaList.filter(s => s.violationStatus);
-  const totalOwed = violations.reduce((acc, s) => acc + ((s.penaltyDaily || 0) * Math.max(0, (s.delayDays || 0) - 2)), 0);
+  const totalOwed = violations.reduce((acc, s) => acc + (s.penaltyOwed || 0), 0);
   const validCompliances = filteredSlaList.filter(s => s.compliance !== null);
   const avgCompliance = validCompliances.length > 0
     ? Math.round(validCompliances.reduce((a, s) => a + (s.compliance || 0), 0) / validCompliances.length)
     : null;
+
+  const lateDeliveryPenalties = filteredSlaList
+    .filter(s => s.violationStatus && (!s.violationType || s.violationType === "LateDelivery"))
+    .reduce((acc, s) => acc + (s.penaltyOwed || 0), 0);
+
+  const underShipmentPenalties = filteredSlaList
+    .filter(s => s.violationStatus && s.violationType === "UnderShipment")
+    .reduce((acc, s) => acc + (s.penaltyOwed || 0), 0);
+
+  const damagedGoodsPenalties = filteredSlaList
+    .filter(s => s.violationStatus && s.violationType === "DamagedGoods")
+    .reduce((acc, s) => acc + (s.penaltyOwed || 0), 0);
 
   return (
     <div>
@@ -113,18 +172,51 @@ export default function SLAViolations({ user }) {
           <div style={S.pageDesc}>Track supplier SLA breaches and penalties owed to your company</div>
         </div>
         
-        <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44` }}>
-          <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>Calculator Filter:</span>
-          <select 
-            value={filterSupplier}
-            onChange={e => setFilterSupplier(e.target.value)}
-            style={{ padding: "6px 12px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, outline: "none", cursor: "pointer" }}
-          >
-            <option value="ALL">All Suppliers</option>
-            {Array.from(new Set(slaList.map(v => v.supplier))).filter(Boolean).sort().map(sup => (
-              <option key={sup} value={sup}>{sup}</option>
-            ))}
-          </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Search bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44` }}>
+            <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>🔍 Search:</span>
+            <input
+              type="text"
+              placeholder="Search supplier..."
+              value={searchQuery}
+              onChange={e => {
+                setSearchQuery(e.target.value);
+                setSelected(null);
+                setPenalty(null);
+              }}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: `1px solid ${C.border}`,
+                background: C.bg,
+                color: C.text,
+                fontSize: 13,
+                outline: "none",
+                width: 160,
+                transition: "all 0.15s",
+              }}
+            />
+          </div>
+
+          {/* Supplier dropdown */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44` }}>
+            <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>Filter by Supplier:</span>
+            <select 
+              value={filterSupplier}
+              onChange={e => {
+                setFilterSupplier(e.target.value);
+                setSelected(null);
+                setPenalty(null);
+              }}
+              style={{ padding: "6px 12px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, outline: "none", cursor: "pointer" }}
+            >
+              <option value="ALL">All Suppliers</option>
+              {Array.from(new Set(slaList.map(v => v.supplier))).filter(Boolean).sort().map(sup => (
+                <option key={sup} value={sup}>{sup}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -192,14 +284,16 @@ export default function SLAViolations({ user }) {
                     <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
                       <span style={{ fontFamily: "monospace", color: C.blue }}>{s.id}</span> · {s.material}
                     </div>
-                    {s.violationStatus && s.penaltyDaily > 0 && (
+                    {s.violationStatus && s.penaltyOwed > 0 && (
                       <div style={{ fontSize: 12, color: C.green, marginTop: 2, fontWeight: 600 }}>
-                        💰 ${((s.penaltyDaily) * Math.max(0, (s.delayDays || 0) - 2)).toLocaleString()} owed
+                        💰 ${s.penaltyOwed.toLocaleString()} owed
                       </div>
                     )}
                   </div>
                   {s.violationStatus
-                    ? <span style={S.riskBadge("CRITICAL")}>BREACHED</span>
+                    ? <span style={S.riskBadge("CRITICAL")}>
+                        {s.violationType === "UnderShipment" ? "⚠️ UNDER-SHIPMENT" : s.violationType === "DamagedGoods" ? "❌ DAMAGED GOODS" : "⏳ LATE DELIVERY"}
+                      </span>
                     : <span style={S.riskBadge("LOW")}>COMPLIANT</span>}
                 </div>
 
@@ -217,7 +311,7 @@ export default function SLAViolations({ user }) {
                     style={{ ...S.btn("secondary"), fontSize: 11, padding: "4px 10px", textDecoration: "none" }}>
                     ✉ Contact
                   </a>
-                  {s.delayDays > 0 && (
+                  {s.violationStatus && (
                     <button style={{ ...S.btn("ghost"), fontSize: 11, padding: "4px 10px" }} onClick={() => handleCalcPenalty(s)}>
                       💰 Calc Penalty
                     </button>
@@ -243,24 +337,64 @@ export default function SLAViolations({ user }) {
               )}
               {penalty && !calcLoading && (
                 <div>
+                  {penalty.type && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>
+                      Violation: {penalty.type}
+                    </div>
+                  )}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-                    {[
-                      ["SLA ID", penalty.slaId, C.blue],
-                      ["Total Delay", `${penalty.delayDays} days`, C.orange],
-                      ["Grace Period", `${penalty.gracePeriodDays} days`, C.muted],
-                      ["Billable Days", `${penalty.billableDays} days`, C.text],
-                    ].map(([k, v, c], i) => (
-                      <div key={i} style={{ padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
-                        <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>{k}</div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: c }}>{v}</div>
-                      </div>
-                    ))}
+                    {penalty.type === "Under-Shipment" ? (
+                      <>
+                        {[
+                          ["Ordered Qty", `${penalty.orderedQty} units`, C.blue],
+                          ["Delivered Qty", `${penalty.deliveredQty} units`, C.green],
+                          ["Missed Qty", `${penalty.missedQty} units`, C.red],
+                          ["Penalty Rate", `$${penalty.rate}/unit`, C.text],
+                        ].map(([k, v, c], i) => (
+                          <div key={i} style={{ padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>{k}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: c }}>{v}</div>
+                          </div>
+                        ))}
+                      </>
+                    ) : penalty.type === "Damaged Goods (Quality)" ? (
+                      <>
+                        {[
+                          ["Order Value", `$${penalty.totalCost.toLocaleString()}`, C.blue],
+                          ["Penalty Rate", `${penalty.rate}%`, C.red],
+                        ].map(([k, v, c], i) => (
+                          <div key={i} style={{ padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>{k}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: c }}>{v}</div>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        {[
+                          ["Total Delay", `${penalty.delayDays} days`, C.orange],
+                          ["Grace Period", `${penalty.gracePeriodDays} days`, C.muted],
+                          ["Billable Days", `${penalty.billableDays} days`, C.text],
+                          ["Daily Rate", `$${penalty.dailyRate}/day`, C.text],
+                        ].map(([k, v, c], i) => (
+                          <div key={i} style={{ padding: "8px 10px", background: C.bg, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>{k}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: c }}>{v}</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </div>
                   <div style={{ padding: "14px 16px", background: C.green + "11", border: `1px solid ${C.green}33`, borderRadius: 8 }}>
                     <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>PENALTY OWED TO YOUR COMPANY</div>
                     <div style={{ fontSize: 30, fontWeight: 800, color: C.green }}>${penalty.totalPenalty.toLocaleString()}</div>
                     <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
-                      ${penalty.dailyRate.toLocaleString()}/day × {penalty.billableDays} billable days
+                      {penalty.type === "Under-Shipment"
+                        ? `$${penalty.rate.toLocaleString()}/unit × ${penalty.missedQty} units missed`
+                        : penalty.type === "Damaged Goods (Quality)"
+                        ? `${penalty.rate}% of $${penalty.totalCost.toLocaleString()} PO cost`
+                        : `$${penalty.dailyRate.toLocaleString()}/day × ${penalty.billableDays} billable days`
+                      }
                     </div>
                     {penalty.clause && penalty.clause !== "—" && (
                       <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{penalty.clause}</div>
@@ -271,10 +405,10 @@ export default function SLAViolations({ user }) {
             </div>
 
             {/* Compliance chart */}
-            {slaList.some(s => s.compliance !== null) && (
+            {filteredSlaList.some(s => s.compliance !== null) && (
               <div style={S.card}>
                 <div style={{ ...S.cardTitle, marginBottom: 14 }}>📊 Compliance Overview</div>
-                {slaList.map((s, i) => (
+                {filteredSlaList.map((s, i) => (
                   <div key={i} style={{ marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                       <div>
@@ -282,9 +416,9 @@ export default function SLAViolations({ user }) {
                         <span style={{ fontSize: 11, color: C.muted, marginLeft: 6 }}>{s.id}</span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        {s.violationStatus && s.penaltyDaily > 0 && (
+                        {s.violationStatus && s.penaltyOwed > 0 && (
                           <span style={{ fontSize: 10, color: C.green, fontWeight: 600 }}>
-                            +${((s.penaltyDaily) * Math.max(0, (s.delayDays || 0) - 2)).toLocaleString()} owed
+                            +${s.penaltyOwed.toLocaleString()} owed
                           </span>
                         )}
                         <span style={{ fontSize: 13, fontWeight: 700, color: s.compliance > 80 ? C.green : s.compliance > 60 ? C.orange : C.red }}>
@@ -300,9 +434,32 @@ export default function SLAViolations({ user }) {
                   </div>
                 ))}
                 {totalOwed > 0 && (
-                  <div style={{ marginTop: 14, padding: "10px 14px", background: C.accent + "11", border: `1px solid ${C.accent}33`, borderRadius: 8 }}>
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 3 }}>TOTAL PENALTIES OWED</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: C.accent }}>${totalOwed.toLocaleString()}</div>
+                  <div style={{ marginTop: 14, padding: "12px 14px", background: C.accent + "11", border: `1px solid ${C.accent}33`, borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: "0.05em" }}>PENALTY BY VIOLATION TYPE</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {lateDeliveryPenalties > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                          <span style={{ color: C.textSoft }}>⏳ Late Delivery</span>
+                          <span style={{ color: C.accent, fontWeight: 700 }}>${lateDeliveryPenalties.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {underShipmentPenalties > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                          <span style={{ color: C.textSoft }}>⚠️ Under-Shipment</span>
+                          <span style={{ color: C.accent, fontWeight: 700 }}>${underShipmentPenalties.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {damagedGoodsPenalties > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                          <span style={{ color: C.textSoft }}>❌ Damaged Goods</span>
+                          <span style={{ color: C.accent, fontWeight: 700 }}>${damagedGoodsPenalties.toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div style={{ borderTop: `1px solid ${C.accent}22`, marginTop: 6, paddingTop: 6, display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}>
+                        <span style={{ color: C.text }}>Total Penalties</span>
+                        <span style={{ color: C.accent }}>${totalOwed.toLocaleString()}</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

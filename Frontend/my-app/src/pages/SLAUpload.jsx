@@ -56,6 +56,8 @@ export default function SLAUpload({ user }) {
         lead_time_days: result.mapped_sla?.lead_time_days || Math.ceil((result.extracted_data?.sla_lead_time_hours || 0) / 24) || "",
         penalty_clause: result.mapped_sla?.penalty_clause || `$${result.extracted_data?.delay_penalty_rate || 0}/day` || "",
         corrections:    "",
+        quantity:       result.mapped_sla?.quantity       || result.extracted_data?.quantity       || 100,
+        unit_cost:      result.mapped_sla?.unit_cost      || result.extracted_data?.unit_cost      || 15.0,
       });
       setStep("review");
     } catch (err) {
@@ -82,6 +84,8 @@ export default function SLAUpload({ user }) {
         lead_time_days: parseInt(editedFields.lead_time_days, 10) || 0,
         penalty_clause: editedFields.penalty_clause,
         corrections:    editedFields.corrections || null,
+        quantity:       parseInt(editedFields.quantity, 10) || 0,
+        unit_cost:      parseFloat(editedFields.unit_cost) || 0.0,
       });
       setConfirmed(result);
       setStep("done");
@@ -175,6 +179,8 @@ export default function SLAUpload({ user }) {
                       ["Delay Penalty", `$${extraction.extracted_data.delay_penalty_rate}/day`],
                       ["Quality Threshold", `${(extraction.extracted_data.minimum_quality_threshold * 100).toFixed(0)}%`],
                       ["Quality Penalty", `${(extraction.extracted_data.quality_penalty_rate * 100).toFixed(0)}%`],
+                      ["Quantity", `${extraction.extracted_data.quantity || 0}`],
+                      ["Unit Cost", `$${extraction.extracted_data.unit_cost || 0.0}`],
                     ].map(([k, v], i) => (
                       <div key={i} style={{ fontSize: 12, display: "flex", justifyContent: "space-between" }}>
                         <span style={{ color: C.muted }}>{k}</span>
@@ -189,6 +195,8 @@ export default function SLAUpload({ user }) {
               <Field label="Material"         field="material"       editedFields={editedFields} setEditedFields={setEditedFields} />
               <Field label="Lead Time (Days)" field="lead_time_days" type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
               <Field label="Penalty Clause"   field="penalty_clause" editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Quantity"         field="quantity"       type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Unit Cost ($)"    field="unit_cost"      type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
