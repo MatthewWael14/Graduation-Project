@@ -11,13 +11,20 @@ const SUGGESTIONS = [
   "What deliveries are currently delayed?",
   "Which suppliers have SLA violations?",
   "What production lines are impacted by delays?",
-  "Show me fallback suppliers for Lithium Carbonate",
-  "What is the penalty for RapidRaw LLC breach?",
+  "Show me fallback suppliers for at-risk materials",
+  "What is the total penalty owed for current breaches?",
 ];
 
 export default function ChatAssistant({ user }) {
   const [messages, setMessages] = useState([INITIAL_MESSAGE]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => {
+    const prefill = localStorage.getItem("ai_context");
+    if (prefill) {
+      localStorage.removeItem("ai_context");
+      return prefill;
+    }
+    return "";
+  });
   const [loading, setLoading] = useState(false);
   const [backendOnline, setBackendOnline] = useState(null);
   const bottomRef = useRef(null);
