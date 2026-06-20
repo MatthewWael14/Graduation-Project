@@ -55,6 +55,18 @@ class SLAContract(BaseModel):
         examples=["2% deduction per day of delay"],
         description="Penalty clause text for SLA violations",
     )
+    quantity: int = Field(
+        default=0,
+        ge=0,
+        description="Standard order quantity or quantity covered under SLA",
+        examples=[500],
+    )
+    unit_cost: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Unit cost of the material",
+        examples=[12.50],
+    )
 
 
 class ExtractedSLAData(BaseModel):
@@ -143,6 +155,18 @@ class ExtractedSLAData(BaseModel):
         examples=[0.10],
         description="Penalty rate for sub-quality materials as a decimal (0.0–1.0)",
     )
+    quantity: int = Field(
+        default=0,
+        ge=0,
+        description="Standard order quantity or quantity covered under SLA, default to 0 if not found",
+        examples=[500],
+    )
+    unit_cost: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Unit cost of the material, default to 0.0 if not found",
+        examples=[12.50],
+    )
 
 
 class ConfirmedSLA(BaseModel):
@@ -203,6 +227,18 @@ class ConfirmedSLA(BaseModel):
         default=None,
         examples=["Corrected lead time from 72h to 3 days; adjusted penalty rate"],
         description="Optional notes from the reviewer about what was corrected",
+    )
+    quantity: int = Field(
+        default=0,
+        ge=0,
+        description="Standard order quantity or quantity covered under SLA",
+        examples=[500],
+    )
+    unit_cost: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Unit cost of the material",
+        examples=[12.50],
     )
 
 

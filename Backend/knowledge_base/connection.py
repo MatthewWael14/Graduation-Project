@@ -25,7 +25,13 @@ from dotenv import load_dotenv
 from SPARQLWrapper import SPARQLWrapper, JSON, POST, DIGEST
 
 # ---- Load .env file ----
-load_dotenv()
+# Look for .env in Backend/ or current directory to ensure consistency
+if os.path.exists("Backend/.env"):
+    load_dotenv("Backend/.env")
+elif os.path.exists(".env"):
+    load_dotenv(".env")
+else:
+    load_dotenv()
 
 
 class GraphDBConnection:

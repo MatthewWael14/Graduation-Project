@@ -15,11 +15,17 @@ export default function App() {
   const [user,        setUser]        = useState(null);
   const [activePage,  setActivePage]  = useState("dashboard");
   const [refreshKey,  setRefreshKey]  = useState(0);
+  const [aiPrompt,    setAiPrompt]    = useState("");
 
   const handleLogin    = (u) => { setUser(u); setActivePage(ROLE_HOME[u.role] || "dashboard"); };
   const handleLogout   = ()  => { setUser(null); setActivePage("dashboard"); };
-  const handleNavigate = (page) => {
-    if ((ROLE_PAGES[user?.role] || []).includes(page)) setActivePage(page);
+  const handleNavigate = (page, data = null) => {
+    if ((ROLE_PAGES[user?.role] || []).includes(page)) {
+      setActivePage(page);
+      if (page === "ai" && typeof data === "string") {
+        setAiPrompt(data);
+      }
+    }
   };
   const handleRefresh  = () => setRefreshKey(k => k + 1);
 
@@ -34,7 +40,7 @@ export default function App() {
       case "inventory":  return <InventoryRisk  {...props} />;
       case "suppliers":  return <Suppliers      {...props} />;
       case "violations": return <SLAViolations  {...props} />;
-      case "ai":         return <ChatAssistant  {...props} />;
+      case "ai":         return <ChatAssistant  {...props} initialPrompt={aiPrompt} clearInitialPrompt={() => setAiPrompt("")} />;
       case "alerts":     return <Alerts         {...props} />;
       default:           return <Dashboard      {...props} />;
     }

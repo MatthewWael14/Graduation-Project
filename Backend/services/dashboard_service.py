@@ -40,6 +40,13 @@ def _get_impacted_cached() -> list[dict]:
     return _impacted_cache
 
 
+def invalidate_impacted_cache() -> None:
+    """Clear the cached impacted-products query immediately."""
+    global _impacted_cache
+    logger.debug("[cache INVALIDATION] Clearing cached impacted products.")
+    _impacted_cache = None
+
+
 
 def get_risk_scores() -> list[dict]:
     """
@@ -51,7 +58,7 @@ def get_risk_scores() -> list[dict]:
     # NOTE: We omit `?material rdf:type :RawMaterial` to avoid Cartesian product explosion under OWL inference.
     q_all = f"""
     {PREFIXES}
-    SELECT DISTINCT ?supplierName ?materialName ?processName ?productName ?reliabilityScore ?leadTimeDays ?country
+    SELECT DISTINCT ?supplierName ?materialName ?processName ?productName ?reliabilityScore ?leadTimeDays ?country ?stock ?safetyStock
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
@@ -75,17 +82,21 @@ def get_risk_scores() -> list[dict]:
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
         OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
         OPTIONAL {{ ?supplier :country ?country . }}
+        OPTIONAL {{ ?material :hasInventoryStock ?stock . }}
+        OPTIONAL {{ ?material :hasSafetyStockLevel ?safetyStock . }}
     }}
     """
     all_rows = graphdb.execute_sparql_select(q_all)
 
     risk_scores = []
-    seen_materials = set()
+    seen_pairs = set()
     
     # First, guarantee all RED impacted items are added
     for r in impacted:
         mat_name = r.get("materialLabel", "Unknown")
         sup_name = r.get("supplierLabel", "Unknown")
+        if (sup_name, mat_name) in seen_pairs:
+            continue
         risk_scores.append({
             "material":         mat_name,
             "materialLabel":    mat_name,
@@ -99,15 +110,18 @@ def get_risk_scores() -> list[dict]:
             "reliabilityScore": None,
             "leadTime":         None,
             "country":          None,
+            "stock":            int(float(r.get("stock"))) if r.get("stock") is not None else 0,
+            "threshold":        int(float(r.get("safetyStock"))) if r.get("safetyStock") is not None else 0,
+            "requiredQty":      int(float(r.get("reqQty"))) if r.get("reqQty") is not None else 100,
         })
-        seen_materials.add(mat_name)
+        seen_pairs.add((sup_name, mat_name))
 
     # Then add the GREEN ones from all_rows, and enrich the RED ones if we found matching supplier data
     for row in all_rows:
         mat_name = row.get("materialName", "Unknown")
         sup_name = row.get("supplierName", "Unknown")
         
-        if mat_name in seen_materials:
+        if (sup_name, mat_name) in seen_pairs:
             # Enrich ONLY the matching supplier entry (match by both material AND supplier name)
             for rs in risk_scores:
                 if rs["material"] == mat_name and rs["supplierLabel"] == sup_name:
@@ -117,6 +131,10 @@ def get_risk_scores() -> list[dict]:
                         rs["leadTime"] = row.get("leadTimeDays")
                     if not rs["country"]:
                         rs["country"] = row.get("country")
+                    if not rs.get("stock") and row.get("stock") is not None:
+                        rs["stock"] = int(float(row.get("stock")))
+                    if not rs.get("threshold") and row.get("safetyStock") is not None:
+                        rs["threshold"] = int(float(row.get("safetyStock")))
             continue
             
         risk_scores.append({
@@ -132,8 +150,11 @@ def get_risk_scores() -> list[dict]:
             "reliabilityScore": row.get("reliabilityScore", None),
             "leadTime":         row.get("leadTimeDays", None),
             "country":          row.get("country", None),
+            "stock":            int(float(row.get("stock"))) if row.get("stock") is not None else 0,
+            "threshold":        int(float(row.get("safetyStock"))) if row.get("safetyStock") is not None else 0,
+            "requiredQty":      0,
         })
-        seen_materials.add(mat_name)
+        seen_pairs.add((sup_name, mat_name))
 
     return risk_scores
 
@@ -142,11 +163,10 @@ def get_compliance_alerts() -> list[dict]:
     """
     Returns enriched SLA data including compliance %, deadline, risk level,
     numeric penaltyRate and clause so the SLA Violations page renders fully.
+    Also queries and matches active SLA violations (LateDelivery, UnderShipment, DamagedGoods)
+    from the knowledge graph, calculating their penalties dynamically.
     """
-    # NOTE: We intentionally omit `?material rdf:type :RawMaterial` here.
-    # Under OWL inference mode that triple pattern expands to ALL inferred
-    # subclasses, turning 27 suppliers into 26,000+ rows (Cartesian product).
-    # The :supplies predicate already constrains the material type sufficiently.
+    # 1. Query all primary supplier contracts (supplier-material pairs)
     query = f"""
     {PREFIXES}
     SELECT DISTINCT ?supplier ?supplierName ?materialName ?leadTimeDays ?penalty
@@ -178,7 +198,68 @@ def get_compliance_alerts() -> list[dict]:
     """
     rows = graphdb.execute_sparql_select(query)
 
-    
+    # 2. Query all active SLAViolations and their raw details
+    violations_query = f"""
+    {PREFIXES}
+    SELECT DISTINCT ?delivery ?violationType ?supplier ?supplierName ?materialName 
+                    ?orderedQty ?deliveredQty ?totalCost ?delayDuration
+                    ?missedItemPenaltyRate ?qualityPenaltyRate ?delayPenaltyRate
+    WHERE {{
+        ?delivery rdf:type :SLAViolation .
+        OPTIONAL {{ ?delivery :hasViolationType ?violationType . }}
+        
+        # Link delivery to supplier
+        {{
+            ?delivery :fulfills ?po .
+            ?po :issuedTo ?supplier .
+            OPTIONAL {{ ?po :hasOrderedQuantity ?orderedQty . }}
+            OPTIONAL {{ ?po :hasTotalOrderCost ?totalCost . }}
+        }}
+        UNION
+        {{
+            ?delivery :transports ?material .
+            {{ ?supplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?supplier . }}
+        }}
+        FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
+        
+        # Resolve material and supplier name
+        OPTIONAL {{ ?delivery :transports ?material_node . }}
+        BIND(COALESCE(?material_node, ?placeholder_mat) AS ?actual_material)
+        OPTIONAL {{ ?supplier :supplies ?placeholder_mat . }}
+        OPTIONAL {{ ?actual_material rdfs:label ?mLabel . }}
+        BIND(COALESCE(?mLabel, REPLACE(STR(?actual_material), "^.*#", "")) AS ?materialName)
+        
+        OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
+        OPTIONAL {{ ?supplier :hasName ?sName . }}
+        BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
+        
+        # Get SLA parameters
+        OPTIONAL {{
+            {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
+            OPTIONAL {{ ?sla :hasMissedItemPenaltyRate ?missedItemPenaltyRate . }}
+            OPTIONAL {{ ?sla :hasQualityPenaltyRate ?qualityPenaltyRate . }}
+        }}
+        OPTIONAL {{ ?supplier :penaltyRatePerDay ?delayPenaltyRate . }}
+        OPTIONAL {{ ?delivery :hasDelayDuration ?delayDuration . }}
+        OPTIONAL {{ ?delivery :hasDeliveredQuantity ?deliveredQty . }}
+    }}
+    """
+    violations_res = graphdb.execute_sparql_select(violations_query)
+
+    # Deduplicate violations by delivery URI
+    unique_violations = {}
+    for r in violations_res:
+        deliv = r.get("delivery")
+        if not deliv:
+            continue
+        if deliv not in unique_violations:
+            unique_violations[deliv] = r
+        else:
+            existing = unique_violations[deliv]
+            if not existing.get("materialName") and r.get("materialName"):
+                unique_violations[deliv] = r
+
+    # Pre-populate delay map from cache
     impacted = _get_impacted_cached()
     supplier_delay_map = {}
     for r in impacted:
@@ -188,26 +269,119 @@ def get_compliance_alerts() -> list[dict]:
             days = int(delay_hrs / 24) if delay_hrs > 0 else 1
             supplier_delay_map[sup] = max(supplier_delay_map.get(sup, 0), days)
 
+    # 3. Match violations to contracts
+    assigned_violations = set()
     alerts = []
+
     for row in rows:
         supplier_name = row.get("supplierName", "Unknown")
-        is_delayed = supplier_name in supplier_delay_map
-        actual_delay_days = supplier_delay_map.get(supplier_name, 0)
+        material_name = row.get("materialName", "Unknown")
+        
+        # Find matching violation
+        matched_violation = None
+        
+        # A. Match strictly by supplier AND material
+        for deliv, v in unique_violations.items():
+            if deliv in assigned_violations:
+                continue
+            if v.get("supplierName") == supplier_name and v.get("materialName") == material_name:
+                matched_violation = v
+                assigned_violations.add(deliv)
+                break
+                
+        # B. Match by supplier only if no material-specific violation was found (and violation has no material link)
+        if not matched_violation:
+            for deliv, v in unique_violations.items():
+                if deliv in assigned_violations:
+                    continue
+                if v.get("supplierName") == supplier_name and not v.get("materialName"):
+                    matched_violation = v
+                    assigned_violations.add(deliv)
+                    break
+                    
+        # C. Match any remaining violations of this supplier
+        if not matched_violation:
+            for deliv, v in unique_violations.items():
+                if deliv in assigned_violations:
+                    continue
+                if v.get("supplierName") == supplier_name:
+                    matched_violation = v
+                    assigned_violations.add(deliv)
+                    break
+
+        # Calculate values based on match
+        violation_status = matched_violation is not None
+        violation_type = None
+        penalty_owed = 0.0
+        actual_delay_days = 0
+        ordered_qty = None
+        delivered_qty = None
+        total_cost = None
+        missed_item_penalty_rate = None
+        quality_penalty_rate = None
+        
+        if matched_violation:
+            violation_type = matched_violation.get("violationType")
+            ordered_qty = float(matched_violation.get("orderedQty", 0) or 0) if matched_violation.get("orderedQty") else None
+            delivered_qty = float(matched_violation.get("deliveredQty", 0) or 0) if matched_violation.get("deliveredQty") else None
+            total_cost = float(matched_violation.get("totalCost", 0) or 0) if matched_violation.get("totalCost") else None
+            missed_item_penalty_rate = float(matched_violation.get("missedItemPenaltyRate", 0) or 0) if matched_violation.get("missedItemPenaltyRate") else None
+            quality_penalty_rate = float(matched_violation.get("qualityPenaltyRate", 0) or 0) if matched_violation.get("qualityPenaltyRate") else None
+            
+            if violation_type == "LateDelivery":
+                delay_hours = float(matched_violation.get("delayDuration", 0) or 0)
+                actual_delay_days = int(delay_hours / 24) if delay_hours > 0 else 1
+                if supplier_name in supplier_delay_map:
+                    actual_delay_days = max(actual_delay_days, supplier_delay_map[supplier_name])
+                
+                rate = float(matched_violation.get("delayPenaltyRate", 0) or 0)
+                billable_days = max(0, actual_delay_days - 2)
+                penalty_owed = billable_days * rate
+                
+            elif violation_type == "UnderShipment":
+                if ordered_qty is not None and delivered_qty is not None:
+                    missed = max(0.0, ordered_qty - delivered_qty)
+                    rate = missed_item_penalty_rate if missed_item_penalty_rate is not None else 50.0
+                    penalty_owed = missed * rate
+                    
+            elif violation_type == "DamagedGoods":
+                cost = total_cost if total_cost is not None else 5000.0
+                rate = quality_penalty_rate if quality_penalty_rate is not None else 0.1
+                penalty_owed = cost * rate
+        else:
+            # Check if there is a delay in the cache even if not in unique_violations
+            if supplier_name in supplier_delay_map:
+                violation_status = True
+                violation_type = "LateDelivery"
+                actual_delay_days = supplier_delay_map[supplier_name]
+                rate = float(row.get("penaltyRate", 0) or 0)
+                billable_days = max(0, actual_delay_days - 2)
+                penalty_owed = billable_days * rate
 
         # leadTimeDays as int
         lead_days = int(float(row.get("leadTimeDays", 0) or 0))
 
         # SLA Compliance strictly evaluates contract adherence based on active breaches.
-        # If there is no delay, the contract is 100% compliant.
-        # If breached, compliance drops proportionally to the severity of the delay.
-        if actual_delay_days == 0:
+        # If there is no delay/violation, the contract is 100% compliant.
+        if not violation_status:
             compliance = 100
         else:
-            if lead_days > 0:
-                severity = actual_delay_days / lead_days
-                compliance = max(0, int((1.0 - severity) * 100))
+            if violation_type == "LateDelivery":
+                if lead_days > 0:
+                    severity = actual_delay_days / lead_days
+                    compliance = max(0, int((1.0 - severity) * 100))
+                else:
+                    compliance = 0
+            elif violation_type == "UnderShipment":
+                if ordered_qty and ordered_qty > 0:
+                    deliv_q = delivered_qty if delivered_qty is not None else 0
+                    compliance = max(0, int((deliv_q / ordered_qty) * 100))
+                else:
+                    compliance = 70
+            elif violation_type == "DamagedGoods":
+                compliance = 0  # Severe quality breach
             else:
-                compliance = 0  # 0% if delayed and no baseline lead time is established
+                compliance = 0
 
         # penaltyRate as numeric
         penalty_rate = float(row.get("penaltyRate", 0) or 0)
@@ -221,7 +395,7 @@ def get_compliance_alerts() -> list[dict]:
             if compliance is not None:
                 risk = "CRITICAL" if compliance < 50 else "HIGH" if compliance < 70 else "MEDIUM" if compliance < 85 else "LOW"
             else:
-                risk = "HIGH" if is_delayed else "LOW"
+                risk = "HIGH" if violation_status else "LOW"
 
         # clause
         clause = row.get("clause", row.get("penalty", "—")) or "—"
@@ -230,23 +404,28 @@ def get_compliance_alerts() -> list[dict]:
         penalty_display = row.get("penalty", "")
         if not penalty_display and penalty_rate > 0:
             penalty_display = f"${penalty_rate:,.0f}/day"
-            
-        supplier_name = row.get("supplierName", "Unknown")
 
         alerts.append({
-            "supplier":        supplier_name,
-            "supplierLabel":   supplier_name,
-            "material":        row.get("materialName", "Unknown"),
-            "materialLabel":   row.get("materialName", "Unknown"),
-            "leadTimeDays":    lead_days,
-            "delayDays":       actual_delay_days,
-            "penalty":         penalty_display,
-            "penaltyRate":     penalty_rate,
-            "compliance":      compliance,
-            "deadline":        deadline,
-            "risk":            risk,
-            "clause":          clause,
-            "violationStatus": is_delayed,
+            "supplier":                 supplier_name,
+            "supplierLabel":            supplier_name,
+            "material":                 material_name,
+            "materialLabel":            material_name,
+            "leadTimeDays":             lead_days,
+            "delayDays":                actual_delay_days,
+            "penalty":                  penalty_display,
+            "penaltyRate":              penalty_rate,
+            "compliance":               compliance,
+            "deadline":                 deadline,
+            "risk":                     risk,
+            "clause":                   clause,
+            "violationStatus":          violation_status,
+            "violationType":            violation_type,
+            "penaltyOwed":              penalty_owed,
+            "orderedQty":               ordered_qty,
+            "deliveredQty":             delivered_qty,
+            "totalCost":                total_cost,
+            "missedItemPenaltyRate":    missed_item_penalty_rate,
+            "qualityPenaltyRate":       quality_penalty_rate,
         })
     return alerts
 
@@ -262,9 +441,16 @@ def get_fallback_options(material_id: str) -> list[dict]:
     # Filtering to this type ensures:
     #   (a) The currently-delayed primary supplier never appears in the list.
     #   (b) Suppliers promoted via previous assignments don't bleed across materials.
+    # Grouping by ?supplier and using aggregates (MAX, MIN, SAMPLE) resolves Cartesian
+    # product duplication caused by multi-valued properties under OWL inference.
     query = f"""
     {PREFIXES}
-    SELECT DISTINCT ?supplier ?supplierName ?reliabilityScore ?leadTimeDays ?country
+    SELECT ?supplier 
+           (MAX(?supplierName) AS ?sName) 
+           (MAX(?reliabilityScore) AS ?rScore) 
+           (MIN(?leadTimeDays) AS ?lTime) 
+           (SAMPLE(?country) AS ?cCode) 
+           (MAX(?quantity) AS ?qty)
     WHERE {{
         # Only genuine alternative suppliers — never the broken primary
         ?supplier rdf:type :AlternativeSupplier .
@@ -288,8 +474,17 @@ def get_fallback_options(material_id: str) -> list[dict]:
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
         OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
         OPTIONAL {{ ?supplier :country ?country . }}
+        
+        # Get capacity from SLAContract governing the material
+        OPTIONAL {{
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?supplier ;
+                      :governsMaterial ?mat .
+            OPTIONAL {{ ?contract :hasOrderedQuantity ?quantity . }}
+        }}
     }}
-    ORDER BY DESC(?reliabilityScore)
+    GROUP BY ?supplier
+    ORDER BY DESC(?rScore)
     """
     rows = graphdb.execute_sparql_select(query)
 
@@ -297,10 +492,11 @@ def get_fallback_options(material_id: str) -> list[dict]:
     for row in rows:
         options.append({
             "supplier":         row.get("supplier"),
-            "supplierName":     row.get("supplierName"),
-            "reliabilityScore": row.get("reliabilityScore"),
-            "leadTime":         row.get("leadTimeDays"),
-            "country":          row.get("country"),
+            "supplierName":     row.get("sName"),
+            "reliabilityScore": row.get("rScore"),
+            "leadTime":         row.get("lTime"),
+            "country":          row.get("cCode"),
+            "quantity":         int(float(row.get("qty"))) if row.get("qty") is not None else 0,
         })
     return options
 
@@ -309,6 +505,8 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     Persist a fallback assignment in the Knowledge Graph by inserting
     an RDF triple linking the alternate supplier to the material.
     Uses label-based lookup to avoid SPARQL syntax errors from special chars in names.
+    Also assumes the emergency shipment has been received, adding the alternative
+    supplier's capacity to the material's current stock level.
     """
     from knowledge_base.repository import CONTRACT_GRAPH
 
@@ -317,10 +515,11 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     safe_mat = _sanitize_uri_fragment(material_name)
     safe_sup = _sanitize_uri_fragment(supplier_name)
 
-    # Step 1: look up the actual material + supplier + delivery URIs by label
+    # Step 1: look up the actual material + supplier + delivery URIs by label,
+    # plus the current stock of the material and the fallback capacity/delayed quantity.
     lookup_q = f"""
     {PREFIXES}
-    SELECT ?mat ?sup ?delivery WHERE {{
+    SELECT ?mat ?sup ?delivery ?stock ?capacity ?delayedQty WHERE {{
         OPTIONAL {{
             ?mat rdf:type :RawMaterial .
             OPTIONAL {{ ?mat rdfs:label ?ml . }}
@@ -335,10 +534,22 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
         OPTIONAL {{
             ?delivery rdf:type :DeliveryEvent ;
                       :hasDeliveryStatus "Delayed" .
-            OPTIONAL {{ ?mat rdf:type :RawMaterial . }}
             ?delivery :transports ?mat .
             OPTIONAL {{ ?mat rdfs:label ?ml2 . }}
             FILTER(STR(?ml2) = "{mat_esc}" || REPLACE(STR(?mat), "^.*#", "") = "{safe_mat}")
+        }}
+        OPTIONAL {{
+            ?mat :hasInventoryStock ?stock .
+        }}
+        OPTIONAL {{
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?sup ;
+                      :governsMaterial ?mat .
+            ?contract :hasOrderedQuantity ?capacity .
+        }}
+        OPTIONAL {{
+            ?delivery :fulfills ?po .
+            ?po :hasOrderedQuantity ?delayedQty .
         }}
     }} LIMIT 1
     """
@@ -346,6 +557,11 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     mat_uri_full = rows[0].get("mat") if rows else None
     sup_uri_full = rows[0].get("sup") if rows else None
     delivery_uri_full = rows[0].get("delivery") if rows else None
+
+    # Get stock and quantity values from query results
+    stock_val = int(float(rows[0].get("stock"))) if rows and rows[0].get("stock") is not None else 0
+    capacity_val = int(float(rows[0].get("capacity"))) if rows and rows[0].get("capacity") is not None else 0
+    delayed_val = int(float(rows[0].get("delayedQty"))) if rows and rows[0].get("delayedQty") is not None else 100
 
     mat_ref = f"<{mat_uri_full}>" if mat_uri_full else f":{safe_mat}"
     sup_ref = f"<{sup_uri_full}>" if sup_uri_full else f":{safe_sup}"
@@ -365,7 +581,27 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     """
     graphdb.execute_sparql_update(insert_q)
 
-    # Step 3: Update the delivery status in whatever graph it lives in
+    # Step 3: Update inventory stock level in GraphDB: add the alternative supplier capacity to the current stock
+    if mat_uri_full:
+        added_qty = capacity_val if capacity_val > 0 else delayed_val
+        new_stock = stock_val + added_qty
+        stock_update_q = f"""
+        {PREFIXES}
+        DELETE {{
+            GRAPH ?g {{ <{mat_uri_full}> :hasInventoryStock ?oldStock . }}
+        }}
+        WHERE {{
+            GRAPH ?g {{ <{mat_uri_full}> :hasInventoryStock ?oldStock . }}
+        }} ;
+        INSERT DATA {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                <{mat_uri_full}> :hasInventoryStock {new_stock} .
+            }}
+        }}
+        """
+        graphdb.execute_sparql_update(stock_update_q)
+
+    # Step 4: Update the delivery status in whatever graph it lives in
     if delivery_uri_full:
         # Use the exact delivery URI for a graph-agnostic update
         status_q = f"""
@@ -383,6 +619,9 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     }}
         """
         graphdb.execute_sparql_update(status_q)
+
+    # Invalidate dashboard cache to reflect new stock levels immediately
+    invalidate_impacted_cache()
 
     return {
         "status": "success",
@@ -438,11 +677,7 @@ def get_kpis() -> dict:
 
     # Calculate total SLA penalties owed from actual violations
     alerts = get_compliance_alerts()
-    total_penalty_owed = 0
-    for a in alerts:
-        if a["violationStatus"] and a["penaltyRate"] > 0 and a["delayDays"] > 2:
-            billable_days = a["delayDays"] - 2
-            total_penalty_owed += billable_days * a["penaltyRate"]
+    total_penalty_owed = sum(a.get("penaltyOwed", 0.0) for a in alerts if a.get("violationStatus"))
 
     # SLA compliance = % of suppliers NOT at risk (simple heuristic)
     unique_delayed_suppliers = len(set(r.get("supplierLabel") for r in impacted if r.get("supplierLabel") and r.get("supplierLabel") != "Unknown"))
@@ -550,5 +785,73 @@ def update_alert_status(alert_id: str, status: str) -> dict:
     }}
     """
     graphdb.execute_sparql_update(sparql_update)
-    return {{"status": "success", "alert_id": alert_id, "new_status": status}}
+    return {"status": "success", "alert_id": alert_id, "new_status": status}
+
+
+def run_semantic_enrichment() -> None:
+    """
+    Run SPARQL INSERT queries on startup to materialize semantic shortcuts
+    and missing rdfs:labels in GraphDB, making queries robust to different 
+    translation styles and label lookups.
+    """
+    enrichment_query = f"""
+    {PREFIXES}
+    INSERT {{
+        # 1. Direct delivery to supplier relation
+        ?delivery :isPerformedBy ?supplier .
+        # 2. Direct alternate supplier to material relation
+        ?alt :supplies ?material .
+    }}
+    WHERE {{
+        # Match delivery supplier via PO or transports
+        {{
+            ?delivery rdf:type :DeliveryEvent .
+            {{
+                ?delivery :fulfills ?po .
+                ?po :issuedTo ?supplier .
+                FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
+            }} UNION {{
+                ?delivery :transports ?material .
+                ?supplier :supplies ?material .
+                FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
+            }}
+            FILTER NOT EXISTS {{ ?delivery :isPerformedBy ?supplier . }}
+        }}
+        UNION
+        # Match alternate supplier supplies via similarity
+        {{
+            ?alt rdf:type :AlternativeSupplier .
+            ?incumbent rdf:type :Supplier ;
+                       :supplies ?material .
+            ?alt :suppliesSameMaterialAs ?incumbent .
+            FILTER NOT EXISTS {{ ?alt :supplies ?material . }}
+        }}
+    }}
+    """
+    label_enrichment = f"""
+    {PREFIXES}
+    INSERT {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            ?x rdfs:label ?label .
+        }}
+    }}
+    WHERE {{
+        ?x rdf:type ?type .
+        FILTER(STRSTARTS(STR(?x), "http://example.org/ontology#"))
+        FILTER NOT EXISTS {{ ?x rdfs:label ?anyLabel . }}
+        
+        # Generate friendly label by replacing underscores with spaces
+        BIND(REPLACE(REPLACE(STR(?x), "^.*#", ""), "_", " ") AS ?label)
+    }}
+    """
+    try:
+        graphdb.execute_sparql_update(enrichment_query)
+        logger.info("[Enrichment] Materialized semantic shortcuts successfully.")
+        graphdb.execute_sparql_update(label_enrichment)
+        logger.info("[Enrichment] Materialized missing entity labels successfully.")
+    except Exception as exc:
+        logger.error("[Enrichment] Failed to materialize semantic enrichment: %s", exc)
+
+
+
 

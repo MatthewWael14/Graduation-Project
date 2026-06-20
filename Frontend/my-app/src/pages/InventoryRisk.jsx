@@ -2,6 +2,18 @@ import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
 import { fetchRiskScores } from "../services/api";
 
+const COLUMN_HEADERS = {
+  material: "Material",
+  supplier: "Supplier",
+  process: "Impacted Process",
+  status: "Status",
+  reliabilityScore: "Reliability",
+  leadTime: "Lead Time",
+  stock: "Current Stock",
+  threshold: "Safety Stock Level",
+  requiredQty: "Delayed Quantity"
+};
+
 export default function InventoryRisk({ onNavigate }) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -66,8 +78,8 @@ export default function InventoryRisk({ onNavigate }) {
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>{p.materialLabel || p.material || "—"}</div>
                   <div style={{ fontSize: 12, color: C.muted }}>{p.supplierLabel || p.supplier || "—"}</div>
-                  {(p.productLabel || p.product) && (
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Process: {p.productLabel || p.product}</div>
+                  {(p.processLabel || p.process) && (
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Process: {p.processLabel || p.process}</div>
                   )}
                 </div>
               );
@@ -84,9 +96,9 @@ export default function InventoryRisk({ onNavigate }) {
               <thead>
                 <tr>
                   {Object.keys(products[0] || {})
-                    .filter(k => !k.endsWith("Label"))
+                    .filter(k => k in COLUMN_HEADERS)
                     .map(k => (
-                      <th key={k} style={S.th}>{k}</th>
+                      <th key={k} style={S.th}>{COLUMN_HEADERS[k]}</th>
                     ))}
                 </tr>
               </thead>
@@ -94,10 +106,18 @@ export default function InventoryRisk({ onNavigate }) {
                 {products.map((p, i) => (
                   <tr key={i} className="data-row">
                     {Object.keys(p)
-                      .filter(k => !k.endsWith("Label"))
-                      .map(k => (
-                        <td key={k} style={{ ...S.td, fontSize: 13 }}>{String(p[k] ?? "—")}</td>
-                      ))}
+                      .filter(k => k in COLUMN_HEADERS)
+                      .map(k => {
+                        let val = p[k];
+                        if (k === "reliabilityScore" && val !== null) {
+                          val = `${(parseFloat(val) * 100).toFixed(0)}%`;
+                        } else if (k === "leadTime" && val !== null) {
+                          val = `${val}d`;
+                        }
+                        return (
+                          <td key={k} style={{ ...S.td, fontSize: 13 }}>{String(val ?? "—")}</td>
+                        );
+                      })}
                   </tr>
                 ))}
               </tbody>
@@ -109,9 +129,30 @@ export default function InventoryRisk({ onNavigate }) {
       {selected !== null && products[selected] && (
         <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${C.blue}` }}>
           <div style={{ ...S.cardTitle, marginBottom: 12 }}>🔍 Detail — {products[selected].materialLabel || products[selected].material}</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button style={S.btn()} onClick={() => onNavigate("suppliers")}>🔄 Find Fallback Supplier</button>
-            <button style={S.btn("ghost")} onClick={() => onNavigate("ai")}>🤖 Ask AI</button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={S.btn()} onClick={() => onNavigate("suppliers")}>🔄 Find Fallback Supplier</button>
+            </div>
+            
+            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 8 }}>🤖 Ask AI Assistant:</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button style={{ ...S.btn("ghost"), fontSize: 12 }} onClick={() => {
+                  const mat = products[selected].materialLabel || products[selected].material || "";
+                  onNavigate("ai", `Are there any alternative suppliers for ${mat}?`);
+                }}>🔍 Alternative Suppliers</button>
+                
+                <button style={{ ...S.btn("ghost"), fontSize: 12 }} onClick={() => {
+                  const mat = products[selected].materialLabel || products[selected].material || "";
+                  onNavigate("ai", `Which production lines are affected by ${mat}?`);
+                }}>🏭 Impacted Production Lines</button>
+                
+                <button style={{ ...S.btn("ghost"), fontSize: 12 }} onClick={() => {
+                  const mat = products[selected].materialLabel || products[selected].material || "";
+                  onNavigate("ai", `What is the inventory stock and safety stock level of ${mat}?`);
+                }}>📦 Stock Levels</button>
+              </div>
+            </div>
           </div>
         </div>
       )}

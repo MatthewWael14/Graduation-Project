@@ -80,6 +80,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
     # ---- Build safe URI fragments ----
     supplier_uri = _sanitize_uri_fragment(contract.supplier_name)
     material_uri = _sanitize_uri_fragment(contract.material)
+    contract_uri = f"Contract_{supplier_uri}_{material_uri}"
 
     # ---- Sanitize values before embedding in SPARQL ----
     # lead_time_days must be a valid integer (min 1) — empty string crashes GraphDB
@@ -109,6 +110,15 @@ def create_contract_graph(contract: SLAContract) -> dict:
             :{supplier_uri} :leadTimeDays ?oldLeadTime .
             :{supplier_uri} :penaltyClause ?oldPenalty .
             :{supplier_uri} :hasReliabilityScore ?oldScore .
+            :{material_uri} :hasUnitCost ?oldUnitCost .
+            :{material_uri} :hasOrderedQuantity ?oldQty .
+            :{contract_uri} rdf:type :SLAContract ;
+                            :hasSupplier :{supplier_uri} ;
+                            :governsMaterial :{material_uri} ;
+                            :leadTimeDays ?oldContractLead ;
+                            :penaltyClause ?oldContractPenalty ;
+                            :hasOrderedQuantity ?oldContractQty ;
+                            :hasUnitCost ?oldContractCost .
         }}
     }}
     INSERT {{
@@ -120,7 +130,9 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
             # ── RawMaterial individual ──
             :{material_uri}  rdf:type       :RawMaterial ;
-                             rdfs:label     "{safe_material}" .
+                             rdfs:label     "{safe_material}" ;
+                             :hasUnitCost   "{contract.unit_cost}"^^xsd:float ;
+                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer .
 
             # ── Relationship: Supplier supplies RawMaterial ──
             :{supplier_uri}  :supplies      :{material_uri} .
@@ -131,6 +143,15 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
             # ── Preserved or Default Reliability Score ──
             :{supplier_uri}  :hasReliabilityScore ?finalScore .
+
+            # ── SLA Contract individual ──
+            :{contract_uri}  rdf:type            :SLAContract ;
+                             :hasSupplier        :{supplier_uri} ;
+                             :governsMaterial    :{material_uri} ;
+                             :leadTimeDays       {lead_days} ;
+                             :penaltyClause      "{raw_penalty}" ;
+                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer ;
+                             :hasUnitCost        "{contract.unit_cost}"^^xsd:float .
         }}
     }}
     WHERE {{
@@ -147,6 +168,27 @@ def create_contract_graph(contract: SLAContract) -> dict:
         OPTIONAL {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{supplier_uri} :hasReliabilityScore ?oldScore .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{material_uri} :hasUnitCost ?oldUnitCost .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{material_uri} :hasOrderedQuantity ?oldQty .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{contract_uri} rdf:type :SLAContract ;
+                                :hasSupplier :{supplier_uri} ;
+                                :governsMaterial :{material_uri} .
+                OPTIONAL {{ :{contract_uri} :leadTimeDays ?oldContractLead . }}
+                OPTIONAL {{ :{contract_uri} :penaltyClause ?oldContractPenalty . }}
+                OPTIONAL {{ :{contract_uri} :hasOrderedQuantity ?oldContractQty . }}
+                OPTIONAL {{ :{contract_uri} :hasUnitCost ?oldContractCost . }}
             }}
         }}
         BIND(COALESCE(?oldScore, "0.75"^^xsd:float) AS ?finalScore)
@@ -180,7 +222,7 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
     sparql_query = f"""
     {PREFIXES}
 
-    SELECT DISTINCT ?supplierLabel ?materialLabel ?processLabel ?productLabel ?riskStatus ?delayHours
+    SELECT ?supplierLabel ?materialLabel ?processLabel ?productLabel ?riskStatus ?stock ?safetyStock ?reqQty (MAX(xsd:double(?delayHoursVal)) AS ?delayHours)
     WHERE {{
         # ── Find delayed deliveries and their transported material ──
         ?delivery  rdf:type     :DeliveryEvent ;
@@ -188,7 +230,13 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
                    :transports  ?material .
         FILTER(STR(?status) = "Delayed")
         
-        OPTIONAL {{ ?delivery :hasDelayDuration ?delayHours . }}
+        OPTIONAL {{ ?delivery :hasDelayDuration ?delayHoursVal . }}
+        OPTIONAL {{ ?material :hasInventoryStock ?stock . }}
+        OPTIONAL {{ ?material :hasSafetyStockLevel ?safetyStock . }}
+        OPTIONAL {{
+            ?delivery :fulfills ?po .
+            ?po :hasOrderedQuantity ?reqQty .
+        }}
         
         # ── Find what PRIMARY supplier provides that material (exclude alternatives) ──
         OPTIONAL {{
@@ -232,6 +280,7 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
         ?process   rdf:type     :ProductionDisruption .
         BIND("true" AS ?riskStatus)
     }}
+    GROUP BY ?supplierLabel ?materialLabel ?processLabel ?productLabel ?riskStatus ?stock ?safetyStock ?reqQty
     ORDER BY ?processLabel
     """
 

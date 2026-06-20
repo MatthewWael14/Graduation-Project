@@ -269,6 +269,8 @@ INSERT DATA {{
             material=data.material,
             lead_time_days=lead_days,
             penalty_clause=penalty_clause,
+            quantity=data.quantity,
+            unit_cost=data.unit_cost,
         )
 
     # ----------------------------------------------------------
@@ -311,6 +313,8 @@ INSERT DATA {{
             material=confirmed.material,
             lead_time_days=confirmed.lead_time_days,
             penalty_clause=confirmed.penalty_clause,
+            quantity=confirmed.quantity,
+            unit_cost=confirmed.unit_cost,
         )
 
         result = create_contract_graph(contract)

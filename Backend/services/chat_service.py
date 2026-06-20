@@ -55,13 +55,26 @@ class ChatState(TypedDict):
 
 
 def fetch_live_schema() -> str:
-    """Query GraphDB for the ontology schema (classes + properties)."""
+    """Query GraphDB for classes and properties that actually have active triples."""
     schema_query = f"""
     {PREFIXES}
-    SELECT ?type ?entity WHERE {{
-      {{ ?entity a owl:Class . BIND("Class" AS ?type) }}
-      UNION {{ ?entity a owl:ObjectProperty . BIND("ObjectProperty" AS ?type) }}
-      UNION {{ ?entity a owl:DatatypeProperty . BIND("DataProperty" AS ?type) }}
+    SELECT DISTINCT ?type ?entity WHERE {{
+      {{
+        ?s a ?entity .
+        BIND("Class" AS ?type)
+      }}
+      UNION
+      {{
+        ?s ?entity ?o .
+        ?entity a owl:ObjectProperty .
+        BIND("ObjectProperty" AS ?type)
+      }}
+      UNION
+      {{
+        ?s ?entity ?o .
+        ?entity a owl:DatatypeProperty .
+        BIND("DataProperty" AS ?type)
+      }}
       FILTER(STRSTARTS(STR(?entity), "http://example.org/ontology#"))
     }}
     """
@@ -140,6 +153,153 @@ def generate_sparql_node(state: ChatState) -> ChatState:
     attempt = state["iteration_count"] + 1
     logger.info("[Chat Node 1] SPARQL Developer (Attempt %d)", attempt)
 
+    # Intent Router & Verified SPARQL Catalog
+    question_clean = state["user_question"].strip().lower().replace("?", "").replace(".", "").replace(",", "").replace("-", " ")
+    
+    matched_sparql = None
+    
+    # Q1: Delayed deliveries
+    if "deliveries" in question_clean and "delayed" in question_clean:
+        matched_sparql = """PREFIX : <http://example.org/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?delivery ?materialName ?supplierName WHERE {
+    ?delivery rdf:type :DeliveryEvent .
+    {
+        ?delivery :hasDeliveryStatus "Delayed" .
+    } UNION {
+        ?delivery :hasViolationType "LateDelivery" .
+    }
+    
+    OPTIONAL {
+        ?delivery :transports ?material .
+        OPTIONAL { ?material rdfs:label ?mLabel . }
+        BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
+    }
+    OPTIONAL {
+        ?delivery :isPerformedBy ?supplier .
+        OPTIONAL { ?supplier rdfs:label ?sLabel . }
+        OPTIONAL { ?supplier :hasName ?sName . }
+        BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
+    }
+}"""
+    # Q2: SLA violations
+    elif "suppliers" in question_clean and "sla" in question_clean and "violation" in question_clean:
+        matched_sparql = """PREFIX : <http://example.org/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?supplierName ?delivery ?violationType WHERE {
+    ?delivery rdf:type :SLAViolation .
+    OPTIONAL { ?delivery :hasViolationType ?violationType . }
+    
+    ?delivery :isPerformedBy ?supplier .
+    FILTER NOT EXISTS { ?supplier rdf:type :AlternativeSupplier . }
+    
+    OPTIONAL { ?supplier rdfs:label ?sLabel . }
+    OPTIONAL { ?supplier :hasName ?sName . }
+    BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
+}"""
+    # Q3: Production lines impacted by delays
+    elif "production line" in question_clean and ("impact" in question_clean or "affect" in question_clean or "delay" in question_clean):
+        matched_sparql = """PREFIX : <http://example.org/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?processName WHERE {
+    ?process rdf:type :ProductionDisruption .
+    OPTIONAL { ?process rdfs:label ?pLabel . }
+    BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processName)
+}"""
+    # Q4: Fallback suppliers for at risk materials
+    elif "fallback" in question_clean and ("supplier" in question_clean or "material" in question_clean):
+        matched_sparql = """PREFIX : <http://example.org/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?materialName ?altSupplierName WHERE {
+    ?delivery rdf:type :SLAViolation .
+    {
+        ?delivery :transports ?material .
+    } UNION {
+        ?delivery :isPerformedBy ?supplier .
+        ?supplier :supplies ?material .
+    }
+    
+    ?altSupplier rdf:type :AlternativeSupplier ;
+                 :supplies ?material .
+                 
+    OPTIONAL { ?material rdfs:label ?mLabel . }
+    BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
+    
+    OPTIONAL { ?altSupplier rdfs:label ?altLabel . }
+    OPTIONAL { ?altSupplier :hasName ?altName . }
+    BIND(COALESCE(?altLabel, ?altName, REPLACE(STR(?altSupplier), "^.*#", "")) AS ?altSupplierName)
+}"""
+    # Q5: Total penalty owed
+    elif "penalty" in question_clean and ("owed" in question_clean or "total" in question_clean or "breach" in question_clean):
+        matched_sparql = """PREFIX : <http://example.org/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT (SUM(?penalty) AS ?totalPenalty) WHERE {
+    ?delivery rdf:type :SLAViolation .
+    OPTIONAL { ?delivery :hasViolationType ?violationType . }
+    
+    ?delivery :isPerformedBy ?supplier .
+    FILTER NOT EXISTS { ?supplier rdf:type :AlternativeSupplier . }
+    
+    # Look up PO details if linked
+    OPTIONAL {
+        ?delivery :fulfills ?po .
+        OPTIONAL { ?po :hasOrderedQuantity ?orderedQty . }
+        OPTIONAL { ?po :hasTotalOrderCost ?totalCost . }
+    }
+    
+    # Quantities
+    OPTIONAL { ?delivery :hasDeliveredQuantity ?deliveredQty . }
+    OPTIONAL { ?delivery :hasDelayDuration ?delayDuration . }
+    
+    # SLA Rates
+    OPTIONAL { ?supplier :hasSLA ?sla_direct . }
+    OPTIONAL { ?sla_indirect :governs ?supplier . }
+    BIND(COALESCE(?sla_direct, ?sla_indirect) AS ?sla)
+    
+    OPTIONAL {
+        FILTER(BOUND(?sla))
+        ?sla :hasMissedItemPenaltyRate ?missedItemPenaltyRate .
+    }
+    OPTIONAL {
+        FILTER(BOUND(?sla))
+        ?sla :hasQualityPenaltyRate ?qualityPenaltyRate .
+    }
+    OPTIONAL { ?supplier :penaltyRatePerDay ?delayPenaltyRate . }
+    
+    BIND(
+        IF(STR(?violationType) = "LateDelivery",
+            IF(COALESCE(xsd:double(?delayDuration), 0.0) > 48.0,
+                (xsd:double(?delayDuration) / 24.0 - 2.0) * COALESCE(xsd:double(?delayPenaltyRate), 0.0),
+                0.0
+            ),
+            IF(STR(?violationType) = "UnderShipment",
+                COALESCE((xsd:double(?orderedQty) - xsd:double(?deliveredQty)) * COALESCE(xsd:double(?missedItemPenaltyRate), 50.0), 0.0),
+                IF(STR(?violationType) = "DamagedGoods",
+                    COALESCE(xsd:double(?totalCost) * COALESCE(xsd:double(?qualityPenaltyRate), 0.1), 0.0),
+                    0.0
+                )
+            )
+        ) AS ?penalty
+    )
+}"""
+
+    if matched_sparql:
+        logger.info("    [+] Query matched pre-verified SPARQL template.")
+        state["generated_sparql"] = matched_sparql
+        state["iteration_count"] = attempt
+        return state
+
     system_prompt = """You are an expert Semantic Web Developer.
 Translate the user's natural language question into a valid SPARQL SELECT query. Use the conversation history to resolve pronouns like "them", "their", or "the late ones".
 
@@ -167,7 +327,18 @@ RULES:
 6. STRING COMPARISONS: When filtering by string values, always wrap the variable in STR(). Example: FILTER(STR(?status) = "Delayed").
 7. USE OPTIONAL: If fetching extra context (dates, reason codes), wrap those triples in an OPTIONAL {{ }} block.
 8. KEEP QUERIES MINIMAL: Do NOT add hypothetical filters. If a user asks 'If Delivery 007 is delayed, what is affected?', just map the physical connection (Delivery -> Material -> Process). Do NOT add a filter checking if the status is actually 'Delayed'. Do NOT add extra class filters.
-9. ENTITY NAMES: When retrieving names for RawMaterial, Product, Process, or Route, do NOT use :hasName (which is only for Supplier / BusinessActor). Instead, query rdfs:label or select the entity resource directly."""
+9. ENTITY NAMES: When retrieving names for RawMaterial, Product, Process, or Route, do NOT use :hasName (which is only for Supplier / BusinessActor). Instead, query rdfs:label or select the entity resource directly.
+10. SLA VIOLATIONS & PENALTIES:
+    - A `DeliveryEvent` itself is classified as an `:SLAViolation` (e.g., `?delivery rdf:type :SLAViolation .`). Do not look for a separate violation object.
+    - Valid `:hasViolationType` literal values are: `"LateDelivery"`, `"UnderShipment"`, and `"DamagedGoods"`.
+    - Penalty rates are defined as follows:
+      * LateDelivery: uses `?supplier :penaltyRatePerDay ?rate` and the delivery's delay duration in hours (`?delivery :hasDelayDuration ?hours`). The delay days = hours / 24, and penalty = max(0, days - 2) * rate.
+      * UnderShipment: uses the PO's ordered quantity `?po :hasOrderedQuantity ?ordered`, delivery's delivered quantity `?delivery :hasDeliveredQuantity ?delivered`, and SLA's missed item rate `?sla :hasMissedItemPenaltyRate ?rate` (penalty = (ordered - delivered) * rate).
+      * DamagedGoods: uses the PO's total cost `?po :hasTotalOrderCost ?cost` and SLA's quality rate `?sla :hasQualityPenaltyRate ?rate` (penalty = cost * rate).
+      * SLA agreements are linked via `?supplier :hasSLA ?sla` or `?sla :governs ?supplier`.
+    - Avoid using properties like `:hasPenaltyAmount` which do not exist in the graph.
+11. ALTERNATIVE SUPPLIERS:
+    - Alternative suppliers are individuals of type `:AlternativeSupplier` and are linked to RawMaterials via `:supplies` or `:isSuppliedBy`, just like standard suppliers."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),

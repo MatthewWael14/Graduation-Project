@@ -42,6 +42,16 @@ app.include_router(dashboard_router)
 # There is NO persistent connection to close on shutdown.
 # We keep the event hook as a placeholder for future
 # cleanup tasks (e.g., clearing caches, flushing logs).
+@app.on_event("startup")
+def startup_event():
+    """Run semantic enrichment query on startup to populate shortcuts."""
+    from services.dashboard_service import run_semantic_enrichment
+    try:
+        run_semantic_enrichment()
+    except Exception as e:
+        print(f"Failed to run startup semantic enrichment: {e}")
+
+
 @app.on_event("shutdown")
 def shutdown_event():
     """

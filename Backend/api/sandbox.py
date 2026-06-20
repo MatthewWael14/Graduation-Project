@@ -24,7 +24,7 @@ except ImportError:
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from models.schemas import ConfirmedSLA, IoTTelemetryEvent, ManagerAlert, SLAContract, OrderRiskPredictionRequest, OrderRiskPredictionResponse
-from services.dashboard_service import get_impacted_products
+from services.dashboard_service import get_impacted_products, invalidate_impacted_cache
 from services.lifting_service import persist_confirmed_sla, save_sla_contract, to_sla_contract
 from services.llm_service import run_extraction_pipeline
 from services.risk_engine_service import process_iot_event
@@ -219,6 +219,7 @@ async def confirm_sla(confirmed: ConfirmedSLA):
     try:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, persist_confirmed_sla, confirmed)
+        invalidate_impacted_cache()
     except Exception as exc:
         logger.error("Failed to persist confirmed SLA: %s", exc)
         raise HTTPException(

@@ -15,7 +15,7 @@ const SUGGESTIONS = [
   "What is the total penalty owed for current breaches?",
 ];
 
-export default function ChatAssistant({ user }) {
+export default function ChatAssistant({ user, initialPrompt, clearInitialPrompt }) {
   const [messages, setMessages] = useState([INITIAL_MESSAGE]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,6 +25,13 @@ export default function ChatAssistant({ user }) {
   useEffect(() => {
     checkBackendHealth().then(h => setBackendOnline(h.online));
   }, []);
+
+  useEffect(() => {
+    if (initialPrompt) {
+      setInput(initialPrompt);
+      clearInitialPrompt();
+    }
+  }, [initialPrompt, clearInitialPrompt]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

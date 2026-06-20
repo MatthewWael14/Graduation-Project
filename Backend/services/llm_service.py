@@ -369,6 +369,8 @@ class LLMClient:
                 missed_item_penalty_rate=150.0,
                 minimum_quality_threshold=0.98,
                 quality_penalty_rate=0.15,
+                quantity=100,
+                unit_cost=15.0,
             )
 
         if schema is RiskAnalysisResult:
