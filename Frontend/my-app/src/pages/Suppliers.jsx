@@ -59,7 +59,7 @@ function SupplierModal({ supplier, onClose }) {
 }
 
 // ── Fallback Modal ────────────────────────────────────────────────────────────
-function FallbackModal({ material, onClose, onAssign }) {
+function FallbackModal({ material, requiredQty = 100, onClose, onAssign }) {
   const [selected, setSelected] = useState(null);
   const [assignType, setAssignType] = useState("temp");
   const [confirming, setConfirming] = useState(false);
@@ -138,9 +138,22 @@ function FallbackModal({ material, onClose, onAssign }) {
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: 12, color: C.muted }}>
-                      {s.leadTime && `Lead time: ${s.leadTime}d`}
-                      {s.country && ` · ${s.country}`}
+                    <div style={{ fontSize: 12, color: C.muted, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>
+                        {s.leadTime && `Lead time: ${s.leadTime}d`}
+                        {s.country && ` · ${s.country}`}
+                      </span>
+                      {s.quantity !== undefined && (
+                        s.quantity < requiredQty ? (
+                          <span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: C.red + "20", color: C.red, fontWeight: 600 }}>
+                            ⚠️ Insufficient Capacity ({s.quantity} / {requiredQty} units)
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: C.green + "20", color: C.green, fontWeight: 600 }}>
+                            ✅ Sufficient Capacity ({s.quantity} / {requiredQty} units)
+                          </span>
+                        )
+                      )}
                     </div>
                   </div>
                   {selected === s && <span style={{ color: C.accent, fontSize: 18 }}>✓</span>}
@@ -149,33 +162,11 @@ function FallbackModal({ material, onClose, onAssign }) {
             </>
           )}
 
-          {/* Assignment type */}
-          {selected && (
-            <div style={{ marginTop: 14, padding: "12px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, fontWeight: 600 }}>ASSIGNMENT TYPE</div>
-              <div style={{ display: "flex", gap: 10 }}>
-                {[
-                  { val: "temp", label: "Temporary", desc: "Emergency supply only" },
-                  { val: "permanent", label: "Permanent", desc: "Replace primary supplier" },
-                ].map(opt => (
-                  <div key={opt.val} onClick={() => setAssignType(opt.val)}
-                    style={{ flex: 1, padding: "10px 12px", borderRadius: 7, cursor: "pointer", border: `2px solid ${assignType === opt.val ? C.accent : C.border}`, background: assignType === opt.val ? C.accent + "08" : "transparent", transition: "all 0.15s" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                      <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${assignType === opt.val ? C.accent : C.border}`, background: assignType === opt.val ? C.accent : "transparent" }} />
-                      <span style={{ fontSize: 13, fontWeight: 700, color: assignType === opt.val ? C.accent : C.text }}>{opt.label}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: C.muted, paddingLeft: 20 }}>{opt.desc}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 22 }}>
             <button style={{ ...S.btn("ghost"), flex: 1 }} onClick={onClose}>Cancel</button>
             <button style={{ ...S.btn(), flex: 2, opacity: selected ? 1 : 0.5 }}
               disabled={!selected || confirming} onClick={handleConfirm}>
-              {confirming ? <span className="spin">⚙</span> : `Assign ${assignType === "temp" ? "Temporary" : "Permanent"} Supplier`}
+              {confirming ? <span className="spin">⚙</span> : "Assign Fallback Supplier"}
             </button>
           </div>
         </div>
@@ -191,6 +182,7 @@ export default function Suppliers({ user }) {
   const [error, setError] = useState("");
   const [detailSupplier, setDetailSupplier] = useState(null);
   const [fallbackMaterial, setFallbackMaterial] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const isLogistics = user?.role === "logistics" || user?.role === "admin";
 
@@ -214,17 +206,61 @@ export default function Suppliers({ user }) {
   // At-risk items = suppliers with RED status
   const atRisk = suppliers.filter(s => s.status === "RED");
 
+  const filteredSuppliers = suppliers.filter(s => {
+    const q = searchQuery.toLowerCase();
+    const name = s.supplier || s.supplierLabel || s.supplierName || "";
+    const material = s.material || s.materialLabel || "";
+    const process = s.process || s.processLabel || "";
+    const product = s.product || s.productLabel || "";
+    return !searchQuery || 
+      name.toLowerCase().includes(q) || 
+      material.toLowerCase().includes(q) ||
+      process.toLowerCase().includes(q) ||
+      product.toLowerCase().includes(q);
+  });
+
   return (
     <div>
       {detailSupplier && <SupplierModal supplier={detailSupplier} onClose={() => setDetailSupplier(null)} />}
-      {fallbackMaterial && <FallbackModal material={fallbackMaterial} onClose={() => setFallbackMaterial(null)} onAssign={handleAssign} />}
+      {fallbackMaterial && (
+        <FallbackModal 
+          material={fallbackMaterial} 
+          requiredQty={suppliers.find(s => (s.material || s.materialLabel) === fallbackMaterial)?.requiredQty || 100}
+          onClose={() => setFallbackMaterial(null)} 
+          onAssign={handleAssign} 
+        />
+      )}
 
-      <div style={S.pageHeader}>
-        <div style={S.pageTitle}>Supplier Network</div>
-        <div style={S.pageDesc}>
-          {isLogistics
-            ? "Click any supplier to view details · Manage fallback assignments for at-risk materials"
-            : "Click any supplier to view full details"}
+      <div style={{ ...S.pageHeader, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={S.pageTitle}>Supplier Network</div>
+          <div style={S.pageDesc}>
+            {isLogistics
+              ? "Click any supplier to view details · Manage fallback assignments for at-risk materials"
+              : "Click any supplier to view full details"}
+          </div>
+        </div>
+
+        {/* Search bar */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44`, marginBottom: 6 }}>
+          <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>🔍 Search:</span>
+          <input
+            type="text"
+            placeholder="Search supplier, material..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 4,
+              border: `1px solid ${C.border}`,
+              background: C.bg,
+              color: C.text,
+              fontSize: 13,
+              outline: "none",
+              width: 200,
+              transition: "all 0.15s",
+            }}
+          />
         </div>
       </div>
 
@@ -304,7 +340,7 @@ export default function Suppliers({ user }) {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
-            {suppliers.map((s, i) => {
+            {filteredSuppliers.map((s, i) => {
               const isRed = s.status === "RED";
               const color = isRed ? C.red : C.green;
               const name = s.supplier || s.supplierLabel || s.supplierName || `Supplier ${i + 1}`;
