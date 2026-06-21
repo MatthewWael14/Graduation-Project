@@ -118,6 +118,45 @@ async def upload_sla(contract: SLAContract):
         )
 
 
+
+@router.post("/upload-transactions")
+async def upload_transactions(file: UploadFile = File(...)):
+    logger.info("Received transactions upload file: %s (content_type=%s)", file.filename, file.content_type)
+    
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read uploaded file: {exc}",
+        )
+        
+    if not contents:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is empty.",
+        )
+        
+    try:
+        from services.supplier_evaluator_service import evaluate_and_update_suppliers
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, evaluate_and_update_suppliers, contents, file.filename
+        )
+        
+        # Clear dashboard cache so the new scores are immediately fetched
+        invalidate_impacted_cache()
+        
+        return result
+        
+    except Exception as e:
+        logger.error("Failed to process transaction sheet: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Evaluation pipeline failed: {str(e)}",
+        )
+
+
 @router.get("/impacted-products")
 async def get_impacted_products_endpoint():
     try:

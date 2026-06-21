@@ -28,7 +28,7 @@ def test_flow():
     print("[1] Seeding baseline scores...")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     seeder_path = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "Machine_Learning", "Procurement_Model", "seed_procurement_evaluation.py")
-    os.system(f"Backend\\venv\\Scripts\\python.exe {seeder_path}")
+    os.system(f"python {seeder_path}")
     
     score_initial = get_reliability_score("Supplier_SUP_001")
     print(f"    - Initial Seed Score for Supplier_SUP_001: {score_initial}")

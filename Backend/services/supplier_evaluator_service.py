@@ -363,7 +363,6 @@ def evaluate_and_update_suppliers(file_bytes: bytes, filename: str) -> dict:
         "updates": report_updates
     }
 
-
 def record_telemetry_transaction_and_update_score(delivery_id: str, delay_hours: int):
     """
     Finds the transaction for the delivery in the CSV dataset and updates its delay properties.
@@ -388,6 +387,66 @@ def record_telemetry_transaction_and_update_score(delivery_id: str, delay_hours:
     # Check if 'Delivery ID' column exists, if not create it
     if "Delivery ID" not in df.columns:
         df["Delivery ID"] = None
+
+    # Query GraphDB for the context first (always needed for the score update step)
+    from knowledge_base.connection import graphdb
+    from knowledge_base.repository import PREFIXES
+    
+    query = f"""{PREFIXES}
+    SELECT ?supplierId ?supplierName ?poType ?supplierRegion ?supplierTier ?paymentTerms 
+           ?material ?materialLabel ?unitOfMeasure ?hasUnitCost ?discountPct ?taxPct ?savingsPct 
+           ?leadTimeDays ?department ?contractType ?maverickSpend ?singleSourceFlag 
+           ?preferredSupplier ?localInternational ?esgScore ?hasCurrency ?lineNet ?slaLeadTimeHours
+    WHERE {{
+        GRAPH <http://example.org/contracts/> {{
+            BIND(:{delivery_id} AS ?delivery)
+            ?delivery a :DeliveryEvent ;
+                      :transports ?material .
+            
+            OPTIONAL {{ ?delivery :poType ?poType . }}
+            OPTIONAL {{ ?delivery :supplierRegion ?supplierRegion . }}
+            OPTIONAL {{ ?delivery :paymentTerms ?paymentTerms . }}
+            OPTIONAL {{ ?delivery :unitOfMeasure ?unitOfMeasure . }}
+            OPTIONAL {{ ?delivery :hasUnitCost ?hasUnitCost . }}
+            OPTIONAL {{ ?delivery :discountPct ?discountPct . }}
+            OPTIONAL {{ ?delivery :taxPct ?taxPct . }}
+            OPTIONAL {{ ?delivery :lineNet ?lineNet . }}
+            OPTIONAL {{ ?delivery :hasCurrency ?hasCurrency . }}
+            OPTIONAL {{ ?delivery :savingsPct ?savingsPct . }}
+            OPTIONAL {{ ?delivery :department ?department . }}
+            OPTIONAL {{ ?delivery :contractType ?contractType . }}
+            OPTIONAL {{ ?delivery :maverickSpend ?maverickSpend . }}
+        }}
+        
+        # Link supplier (graph-agnostic ontology lookup)
+        {{ ?supplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?supplier . }}
+        OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
+        OPTIONAL {{ ?supplier :hasName ?sName . }}
+        BIND(COALESCE(?sLabel, ?sName) AS ?supplierName)
+        BIND(REPLACE(STR(?supplier), "^.*#", "") AS ?supplierId)
+        
+        OPTIONAL {{ ?supplier :hasReliabilityTier ?supplierTier . }}
+        OPTIONAL {{ ?supplier :hasReliabilityScore ?esgScore . }}
+        OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{
+            {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
+            OPTIONAL {{ ?sla :hasSLALeadTime ?slaLeadTimeHours . }}
+            OPTIONAL {{ ?sla :singleSourceFlag ?singleSourceFlag . }}
+            OPTIONAL {{ ?sla :preferredSupplier ?preferredSupplier . }}
+            OPTIONAL {{ ?sla :localInternational ?localInternational . }}
+        }}
+        OPTIONAL {{ ?material rdfs:label ?materialLabel . }}
+    }}
+    LIMIT 1
+    """
+    
+    row = None
+    try:
+        results = graphdb.execute_sparql_select(query)
+        if results:
+            row = results[0]
+    except Exception as e:
+        logger.error("Failed to query GraphDB delivery context for %s: %s", delivery_id, e)
         
     # See if there's a match
     match_mask = df["Delivery ID"] == delivery_id
@@ -398,133 +457,132 @@ def record_telemetry_transaction_and_update_score(delivery_id: str, delay_hours:
         logger.info("[+] Updated existing transaction in CSV for %s (Delivery ID: %s, Delay: %dh).", 
                     df.loc[match_mask, "Supplier Name"].iloc[0], delivery_id, delay_hours)
     else:
-        # Append as a new row. We first query GraphDB for the context
-        from knowledge_base.connection import graphdb
-        from knowledge_base.repository import PREFIXES
-        
-        query = f"""{PREFIXES}
-        SELECT ?supplierId ?supplierName ?poType ?supplierRegion ?supplierTier ?paymentTerms 
-               ?material ?materialLabel ?unitOfMeasure ?hasUnitCost ?discountPct ?taxPct ?savingsPct 
-               ?leadTimeDays ?department ?contractType ?maverickSpend ?singleSourceFlag 
-               ?preferredSupplier ?localInternational ?esgScore ?hasCurrency ?lineNet
-        WHERE {{
-            GRAPH <http://example.org/contracts/> {{
-                BIND(:{delivery_id} AS ?delivery)
-                ?delivery a :DeliveryEvent ;
-                          :transports ?material .
-                OPTIONAL {{ ?material rdfs:label ?materialLabel . }}
-                
-                # Link supplier
-                {{ ?supplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?supplier . }}
-                OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
-                OPTIONAL {{ ?supplier :hasName ?sName . }}
-                BIND(COALESCE(?sLabel, ?sName) AS ?supplierName)
-                BIND(REPLACE(STR(?supplier), "^.*#", "") AS ?supplierId)
-                
-                OPTIONAL {{ ?supplier :hasReliabilityTier ?supplierTier . }}
-                OPTIONAL {{ ?supplier :hasReliabilityScore ?esgScore . }}
-                
-                OPTIONAL {{ ?delivery :poType ?poType . }}
-                OPTIONAL {{ ?delivery :supplierRegion ?supplierRegion . }}
-                OPTIONAL {{ ?delivery :paymentTerms ?paymentTerms . }}
-                OPTIONAL {{ ?delivery :unitOfMeasure ?unitOfMeasure . }}
-                OPTIONAL {{ ?delivery :hasUnitCost ?hasUnitCost . }}
-                OPTIONAL {{ ?delivery :discountPct ?discountPct . }}
-                OPTIONAL {{ ?delivery :taxPct ?taxPct . }}
-                OPTIONAL {{ ?delivery :lineNet ?lineNet . }}
-                OPTIONAL {{ ?delivery :hasCurrency ?hasCurrency . }}
-                OPTIONAL {{ ?delivery :savingsPct ?savingsPct . }}
-                OPTIONAL {{ ?delivery :leadTimeDays ?leadTimeDays . }}
-                OPTIONAL {{ ?delivery :department ?department . }}
-                OPTIONAL {{ ?delivery :contractType ?contractType . }}
-                OPTIONAL {{ ?delivery :maverickSpend ?maverickSpend . }}
-                OPTIONAL {{ ?delivery :singleSourceFlag ?singleSourceFlag . }}
-                OPTIONAL {{ ?delivery :preferredSupplier ?preferredSupplier . }}
-                OPTIONAL {{ ?delivery :localInternational ?localInternational . }}
-            }}
-        }}
-        LIMIT 1
-        """
-        try:
-            results = graphdb.execute_sparql_select(query)
-            if results:
-                row = results[0]
-                
-                mat_uri = row.get("material", "")
-                mat_id = mat_uri.split("#")[-1] if "#" in mat_uri else mat_uri.split("/")[-1]
-                material_label = row.get("materialLabel") or mat_id.replace("_", " ")
+        # Append as a new row using context
+        if row:
+            mat_uri = row.get("material", "")
+            mat_id = mat_uri.split("#")[-1] if "#" in mat_uri else mat_uri.split("/")[-1]
+            material_label = row.get("materialLabel") or mat_id.replace("_", " ")
 
-                now = datetime.datetime.now()
-                new_data = {
-                    "PO Type": row.get("poType", "Standard"),
-                    "Supplier Region": row.get("supplierRegion", "Europe"),
-                    "Supplier Tier": int(float(row.get("supplierTier", 1))) if row.get("supplierTier") else 1,
-                    "Supplier Risk": "Low" if int(float(row.get("supplierTier", 1))) == 1 else "Medium" if int(float(row.get("supplierTier", 1))) == 2 else "High",
-                    "Payment Terms": row.get("paymentTerms", "Net 30"),
-                    "Category": "Raw Materials",
-                    "Sub Category": material_label,
-                    "Unit of Measure": row.get("unitOfMeasure", "KG"),
-                    "Unit Price": float(row.get("hasUnitCost", 10.0)),
-                    "Quantity": 100,  # Default fallback quantity
-                    "Discount Pct": float(row.get("discountPct", 0.0)),
-                    "Tax Pct": float(row.get("taxPct", 5.0)),
-                    "Line Net": float(row.get("lineNet", 1000.0)),
-                    "Currency": row.get("hasCurrency", "GBP"),
-                    "Savings Pct": float(row.get("savingsPct", 5.0)),
-                    "Lead Time Days": int(float(row.get("leadTimeDays", 30))) if row.get("leadTimeDays") else 30,
-                    "Department": row.get("department", "Operations"),
-                    "Contract Type": row.get("contractType", "Framework"),
-                    "Maverick Spend": row.get("maverickSpend", "No"),
-                    "Single Source Flag": row.get("singleSourceFlag", "No"),
-                    "Preferred Supplier": row.get("preferredSupplier", "Yes"),
-                    "Local International": row.get("localInternational", "Local"),
-                    "Supplier ESG Score": float(row.get("esgScore", 0.75)) * 100.0,
-                    "PO_Month_Num": now.month,
-                    "PO_DayOfWeek": now.weekday(),
-                    "Target_OnTimeDelivery": on_time,
-                    "Days Late": days_late,
-                    "Supplier ID": row.get("supplierId", "SUP_UNKNOWN"),
-                    "Supplier Name": row.get("supplierName", "Unknown Supplier"),
-                    "Delivery ID": delivery_id
-                }
-                new_row_df = pd.DataFrame([new_data])
-                df = pd.concat([df, new_row_df], ignore_index=True)
-                logger.info("[+] Appended new delayed transaction to CSV for %s (Delivery ID: %s, Delay: %dh).", 
-                            new_data["Supplier Name"], delivery_id, delay_hours)
-            else:
-                logger.warning("Could not find GraphDB delivery context for %s to append transaction.", delivery_id)
-                return
-        except Exception as e:
-            logger.error("Failed to append transaction from GraphDB: %s", e)
+            # Parse supplier tier safely
+            tier_str = str(row.get("supplierTier", "1")).strip()
+            try:
+                tier_val = int(float(tier_str))
+            except (ValueError, TypeError):
+                tier_lower = tier_str.lower()
+                if "low" in tier_lower:
+                    tier_val = 1
+                elif "med" in tier_lower:
+                    tier_val = 2
+                elif "high" in tier_lower:
+                    tier_val = 3
+                else:
+                    tier_val = 1
+
+            now = datetime.datetime.now()
+            new_data = {
+                "PO Type": row.get("poType", "Standard"),
+                "Supplier Region": row.get("supplierRegion", "Europe"),
+                "Supplier Tier": tier_val,
+                "Supplier Risk": "Low" if tier_val == 1 else "Medium" if tier_val == 2 else "High",
+                "Payment Terms": row.get("paymentTerms", "Net 30"),
+                "Category": "Raw Materials",
+                "Sub Category": material_label,
+                "Unit of Measure": row.get("unitOfMeasure", "KG"),
+                "Unit Price": float(row.get("hasUnitCost", 10.0)),
+                "Quantity": 100,  # Default fallback quantity
+                "Discount Pct": float(row.get("discountPct", 0.0)),
+                "Tax Pct": float(row.get("taxPct", 5.0)),
+                "Line Net": float(row.get("lineNet", 1000.0)),
+                "Currency": row.get("hasCurrency", "GBP"),
+                "Savings Pct": float(row.get("savingsPct", 5.0)),
+                "Lead Time Days": int(float(row.get("leadTimeDays", 30))) if row.get("leadTimeDays") else 30,
+                "Department": row.get("department", "Operations"),
+                "Contract Type": row.get("contractType", "Framework"),
+                "Maverick Spend": row.get("maverickSpend", "No"),
+                "Single Source Flag": row.get("singleSourceFlag", "No"),
+                "Preferred Supplier": row.get("preferredSupplier", "Yes"),
+                "Local International": row.get("localInternational", "Local"),
+                "Supplier ESG Score": float(row.get("esgScore", 0.75)) * 100.0,
+                "PO_Month_Num": now.month,
+                "PO_DayOfWeek": now.weekday(),
+                "Target_OnTimeDelivery": on_time,
+                "Days Late": days_late,
+                "Supplier ID": row.get("supplierId", "SUP_UNKNOWN"),
+                "Supplier Name": row.get("supplierName", "Unknown Supplier"),
+                "Delivery ID": delivery_id
+            }
+            new_row_df = pd.DataFrame([new_data])
+            df = pd.concat([df, new_row_df], ignore_index=True)
+            logger.info("[+] Appended new delayed transaction to CSV for %s (Delivery ID: %s, Delay: %dh).", 
+                        new_data["Supplier Name"], delivery_id, delay_hours)
+        else:
+            logger.warning("Could not find GraphDB delivery context for %s to append transaction.", delivery_id)
             return
             
-    # Save back to CSV
-    df.to_csv(dataset_path, index=False)
+    # Save back to CSV (wrap in try-except in case file is locked by Excel/external editor)
+    try:
+        df.to_csv(dataset_path, index=False)
+    except Exception as csv_err:
+        logger.warning("[!] Could not save transaction update to CSV (file may be locked or read-only): %s. Proceeding with GraphDB score updates.", csv_err)
     
     # Direct Real-Time Score Update (Option 3):
     # Instead of running a full batch recalculation over 5,000+ rows (which dilutes a single delay
     # to less than 0.03%), apply a direct and immediate penalty to the supplier's reliability score in GraphDB.
     try:
-        supplier_id = row.get("supplierId")
-        if supplier_id:
-            supplier_uri = f"http://example.org/ontology#{supplier_id}"
-            current_score_val = row.get("esgScore")
-            current_score = float(current_score_val) if current_score_val is not None else 0.75
-            
-            if delay_hours > 0:
-                # Deduct 0.15 for delay / SLA violation
-                new_reliability_score = max(0.0, round(current_score - 0.15, 4))
-                logger.info("[+] Real-time delay detected. Penalizing supplier %s: %s -> %s", 
-                            supplier_uri, current_score, new_reliability_score)
-            else:
-                # Slight improvement for on-time delivery completion
-                new_reliability_score = min(1.0, round(current_score + 0.01, 4))
-                logger.info("[+] Real-time delivery on-time. Supplier %s: %s -> %s", 
-                            supplier_uri, current_score, new_reliability_score)
+        if row:
+            supplier_id = row.get("supplierId")
+            if supplier_id:
+                supplier_uri = f"http://example.org/ontology#{supplier_id}"
+                current_score_val = row.get("esgScore")
+                current_score = float(current_score_val) if current_score_val is not None else 0.75
                 
-            update_supplier_reliability_score(supplier_uri, new_reliability_score)
+                if delay_hours > 0:
+                    # Standardized dynamic penalty based on SLA Compliance (Option A)
+                    lead_days_val = row.get("leadTimeDays")
+                    if lead_days_val is not None:
+                        lead_days = int(float(lead_days_val))
+                    else:
+                        sla_hours = row.get("slaLeadTimeHours")
+                        if sla_hours is not None:
+                            lead_days = max(1, int(float(sla_hours) / 24.0))
+                        else:
+                            lead_days = 14  # Safe default if no lead time is configured
+                            
+                    actual_delay_days = delay_hours / 24.0
+                    
+                    # Calculate standard SLA compliance
+                    if actual_delay_days <= 2:
+                        compliance = max(90.0, (1.0 - (actual_delay_days / (lead_days * 2.0))) * 100.0)
+                    else:
+                        severity = (actual_delay_days - 2) / lead_days
+                        compliance = max(0.0, (1.0 - severity) * 90.0)
+                    
+                    # Tying compliance deficit to score penalty (capped at 25% max penalty)
+                    penalty = round((1.0 - (compliance / 100.0)) * 0.25, 4)
+                    
+                    new_reliability_score = max(0.0, round(current_score - penalty, 4))
+                    logger.info("[+] Real-time delay detected (%dh delay vs %d-day lead time). SLA Compliance: %.2f%%. Penalizing supplier %s by %.4f: %s -> %s", 
+                                delay_hours, lead_days, compliance, supplier_uri, penalty, current_score, new_reliability_score)
+                else:
+                    # Slight improvement for on-time delivery completion
+                    new_reliability_score = min(1.0, round(current_score + 0.01, 4))
+                    logger.info("[+] Real-time delivery on-time. Supplier %s: %s -> %s", 
+                                supplier_uri, current_score, new_reliability_score)
+                    
+                update_supplier_reliability_score(supplier_uri, new_reliability_score)
+        else:
+            logger.warning("No context row resolved. Skipping direct score update.")
     except Exception as e:
         logger.error("Failed to update supplier score directly in GraphDB: %s", e)
+
+    # Invalidate the dashboard's impacted-products cache so the next page load
+    # reflects the updated reliability score and delayed delivery status immediately.
+    try:
+        from services.dashboard_service import invalidate_impacted_cache
+        invalidate_impacted_cache()
+        logger.info("[+] Dashboard impacted-products cache invalidated after telemetry score update.")
+    except Exception as e:
+        logger.warning("[!] Could not invalidate dashboard cache: %s", e)
 
 
 def record_placed_order_and_update_score(supplier_id: str, material_id: str, quantity: int, unit_price: float, po_date: str, po_type: str = "Standard", department: str = "Operations") -> str:

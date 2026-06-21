@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
-import { fetchRiskScores, fetchFallbackOptions, assignFallback } from "../services/api";
+import { fetchRiskScores, fetchFallbackOptions, assignFallback, uploadTransactions } from "../services/api";
 
 // ── Supplier Detail Modal ─────────────────────────────────────────────────────
 function SupplierModal({ supplier, onClose }) {
@@ -183,6 +183,8 @@ export default function Suppliers({ user }) {
   const [detailSupplier, setDetailSupplier] = useState(null);
   const [fallbackMaterial, setFallbackMaterial] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [uploadingHistorical, setUploadingHistorical] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
 
   const isLogistics = user?.role === "logistics" || user?.role === "admin";
 
@@ -200,6 +202,24 @@ export default function Suppliers({ user }) {
       setSuppliers(newData || []);
     } catch (err) {
       setError(`Failed to assign fallback supplier: ${err.message}`);
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadingHistorical(true);
+    setError("");
+    setUploadMessage("");
+    try {
+      const res = await uploadTransactions(file);
+      setUploadMessage(`Successfully evaluated ${res.evaluated_suppliers_count} suppliers!`);
+      const newData = await fetchRiskScores();
+      setSuppliers(newData || []);
+    } catch (err) {
+      setError(`Upload failed: ${err.message}`);
+    } finally {
+      setUploadingHistorical(false);
     }
   };
 
@@ -241,28 +261,76 @@ export default function Suppliers({ user }) {
           </div>
         </div>
 
-        {/* Search bar */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44`, marginBottom: 6 }}>
-          <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>🔍 Search:</span>
-          <input
-            type="text"
-            placeholder="Search supplier, material..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            style={{
-              padding: "6px 12px",
-              borderRadius: 4,
-              border: `1px solid ${C.border}`,
-              background: C.bg,
-              color: C.text,
-              fontSize: 13,
-              outline: "none",
-              width: 200,
-              transition: "all 0.15s",
-            }}
-          />
+        {/* Header Controls */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+          {/* Historical Upload */}
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <input
+              type="file"
+              id="transaction-file-upload"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: "none" }}
+              onChange={handleFileUpload}
+            />
+            <button
+              onClick={() => document.getElementById("transaction-file-upload").click()}
+              disabled={uploadingHistorical}
+              style={{
+                ...S.btn("ghost"),
+                padding: "8px 16px",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: C.card,
+                border: `1px solid ${C.border}44`,
+                color: C.accent,
+                cursor: "pointer",
+                borderRadius: 8,
+                transition: "all 0.15s"
+              }}
+            >
+              {uploadingHistorical ? (
+                <>
+                  <span className="spin" style={{ display: "inline-block" }}>⚙</span> Processing...
+                </>
+              ) : (
+                "📤 Upload Transactions"
+              )}
+            </button>
+          </div>
+
+          {/* Search bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.card, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}44` }}>
+            <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}>🔍 Search:</span>
+            <input
+              type="text"
+              placeholder="Search supplier, material..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: `1px solid ${C.border}`,
+                background: C.bg,
+                color: C.text,
+                fontSize: 13,
+                outline: "none",
+                width: 180,
+                transition: "all 0.15s",
+              }}
+            />
+          </div>
         </div>
       </div>
+
+      {/* Upload Success Message */}
+      {uploadMessage && (
+        <div style={{ padding: "12px 16px", background: C.green + "15", border: `1px solid ${C.green}33`, borderRadius: 8, fontSize: 13, color: C.green, marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>✓ {uploadMessage}</span>
+          <button onClick={() => setUploadMessage("")} style={{ background: "none", border: "none", color: C.green, cursor: "pointer", fontWeight: 700 }}>✕</button>
+        </div>
+      )}
 
       {/* Error */}
       {error && (

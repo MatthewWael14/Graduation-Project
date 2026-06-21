@@ -87,7 +87,8 @@ def graphdb_injector_node(state: RiskEngineState) -> RiskEngineState:
                            :hasReasonCode "{event.reason_code}"^^xsd:string ;
                            :hasRiskStatus "Predicted"^^xsd:string ;
                            :hasProbability {event.disruption_probability} .
-                :{delivery_uri} :hasDeliveryStatus "Delayed"^^xsd:string .
+                :{delivery_uri} :hasDeliveryStatus "Delayed"^^xsd:string ;
+                               :hasDelayDuration {event.estimated_delay_hours} .
             }}
         }}
         """
@@ -282,6 +283,12 @@ def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
     ontology_risks = state.get("ontology_risks", [])
     delay_days = event.estimated_delay_hours / 24.0
 
+    # Deterministic penalty calculation (used to override the LLM's free estimate)
+    # Formula: max(0, delay_days - 2_day_grace_period) × penalty_rate_per_day
+    penalty_rate = float(ctx.get("delay_penalty_rate") or 0.0)
+    billable_days = max(0.0, delay_days - 2.0)
+    calculated_penalty = round(billable_days * penalty_rate, 2)
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", RISK_ANALYST_SYSTEM_PROMPT),
     ])
@@ -296,7 +303,7 @@ def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
                 "reason_code": event.reason_code,
                 "disruption_probability": event.disruption_probability,
                 "lead_time_days": ctx.get("lead_time_days", 3),
-                "penalty_rate": ctx.get("delay_penalty_rate", 500.0),
+                "penalty_rate": penalty_rate,
                 "inventory_stock": ctx.get("inventory_stock", 80),
                 "safety_stock": ctx.get("safety_stock", 100),
                 "disruption_level": ctx.get("disruption_level", "Medium"),
@@ -305,11 +312,17 @@ def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
             RiskAnalysisResult,
         )
 
+        # Override the LLM's freely-estimated penalty with the deterministic formula.
+        # The LLM tends to skip the grace period and uses the full delay days.
+        analysis.financial_penalty_estimate = calculated_penalty
         logger.info(
-            "    Analysis: risks=%s | severity=%s | confidence=%.2f",
+            "    Analysis: risks=%s | severity=%s | confidence=%.2f | penalty=$%.2f (%.1f billable days × $%.0f/day)",
             analysis.risks,
             analysis.severity,
             analysis.confidence,
+            calculated_penalty,
+            billable_days,
+            penalty_rate,
         )
         state["risk_analysis"] = analysis
 
@@ -319,7 +332,7 @@ def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
             risks=["DelayEvent"],
             confidence=0.5,
             severity="Low",
-            financial_penalty_estimate=0.0,
+            financial_penalty_estimate=calculated_penalty,
             reasoning=f"Risk analysis unavailable due to an error: {exc}",
         )
 
@@ -655,20 +668,16 @@ async def process_iot_event(event: IoTTelemetryEvent) -> ManagerAlert:
             validated=False,
         )
 
-    # Trigger background supplier score recalculation based on this telemetry event
+    # Trigger supplier score recalculation SYNCHRONOUSLY so the next dashboard
+    # fetch always reflects the updated reliability score and delayed status.
     try:
         from services.supplier_evaluator_service import record_telemetry_transaction_and_update_score
-        import threading
-        
-        logger.info("[Risk Engine] Spawning background thread to record delayed telemetry and update supplier score.")
-        thread = threading.Thread(
-            target=record_telemetry_transaction_and_update_score,
-            args=(event.delivery_id, event.estimated_delay_hours),
-            daemon=True
-        )
-        thread.start()
+
+        logger.info("[Risk Engine] Updating supplier score synchronously for delivery %s ...", event.delivery_id)
+        record_telemetry_transaction_and_update_score(event.delivery_id, event.estimated_delay_hours)
+        logger.info("[Risk Engine] Supplier score updated successfully for delivery %s.", event.delivery_id)
     except Exception as exc:
-        logger.error("[Risk Engine] Failed to start background score update thread: %s", exc)
+        logger.error("[Risk Engine] Failed to update supplier score synchronously: %s", exc)
 
     return alert
 

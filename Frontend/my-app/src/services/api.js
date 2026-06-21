@@ -137,6 +137,21 @@ export async function confirmSLA(confirmedData) {
   });
 }
 
+// POST /api/sandbox/upload-transactions
+export async function uploadTransactions(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/api/sandbox/upload-transactions`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Upload failed: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Backend health check ──────────────────────────────────────────────────────
 
 export async function checkBackendHealth() {

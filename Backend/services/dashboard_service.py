@@ -154,9 +154,17 @@ def get_risk_scores() -> list[dict]:
             "threshold":        int(float(row.get("safetyStock"))) if row.get("safetyStock") is not None else 0,
             "requiredQty":      0,
         })
-        seen_pairs.add((sup_name, mat_name))
+    # Post-process status purely on stock vs safety-stock threshold.
+    # An active delayed delivery does NOT independently force RED —
+    # only genuine low inventory (stock < safetyStock) triggers AT RISK.
+    for rs in risk_scores:
+        stock = rs.get("stock", 0)
+        threshold = rs.get("threshold", 0)
+        rs["status"] = "RED" if threshold > 0 and stock < threshold else "GREEN"
 
     return risk_scores
+
+
 
 
 def get_compliance_alerts() -> list[dict]:
@@ -171,6 +179,7 @@ def get_compliance_alerts() -> list[dict]:
     {PREFIXES}
     SELECT DISTINCT ?supplier ?supplierName ?materialName ?leadTimeDays ?penalty
                     ?reliabilityScore ?deliveryDeadline ?riskLevel ?penaltyRate ?clause
+                    ?slaLeadTimeHours
     WHERE {{
         ?supplier rdf:type :Supplier ;
                   :supplies ?material .
@@ -184,6 +193,10 @@ def get_compliance_alerts() -> list[dict]:
         BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
 
         OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{
+            {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
+            OPTIONAL {{ ?sla :hasSLALeadTime ?slaLeadTimeHours . }}
+        }}
         OPTIONAL {{ ?supplier :penaltyClause ?penalty . }}
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
         OPTIONAL {{ ?supplier :deliveryDeadline ?deliveryDeadline . }}
@@ -198,52 +211,68 @@ def get_compliance_alerts() -> list[dict]:
     """
     rows = graphdb.execute_sparql_select(query)
 
-    # 2. Query all active SLAViolations and their raw details
     violations_query = f"""
     {PREFIXES}
-    SELECT DISTINCT ?delivery ?violationType ?supplier ?supplierName ?materialName 
+    SELECT DISTINCT ?delivery ?violationType ?supplier ?supplierName ?materialName
                     ?orderedQty ?deliveredQty ?totalCost ?delayDuration
                     ?missedItemPenaltyRate ?qualityPenaltyRate ?delayPenaltyRate
     WHERE {{
-        ?delivery rdf:type :SLAViolation .
-        OPTIONAL {{ ?delivery :hasViolationType ?violationType . }}
-        
-        # Link delivery to supplier
         {{
-            ?delivery :fulfills ?po .
-            ?po :issuedTo ?supplier .
-            OPTIONAL {{ ?po :hasOrderedQuantity ?orderedQty . }}
-            OPTIONAL {{ ?po :hasTotalOrderCost ?totalCost . }}
+            ?delivery rdf:type :SLAViolation .
+            OPTIONAL {{ ?delivery :hasViolationType ?violationType . }}
         }}
         UNION
         {{
+            ?delivery rdf:type :DeliveryEvent ;
+                      :hasDeliveryStatus "Delayed" .
+            BIND("LateDelivery" AS ?violationType)
+        }}
+
+        # ── Supplier resolution (three paths, most specific first) ────────────
+        # Path 1: delivery transports a material → material supplied by supplier
+        OPTIONAL {{
             ?delivery :transports ?material .
             {{ ?supplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?supplier . }}
         }}
-        FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
-        
-        # Resolve material and supplier name
-        OPTIONAL {{ ?delivery :transports ?material_node . }}
-        BIND(COALESCE(?material_node, ?placeholder_mat) AS ?actual_material)
-        OPTIONAL {{ ?supplier :supplies ?placeholder_mat . }}
-        OPTIONAL {{ ?actual_material rdfs:label ?mLabel . }}
-        BIND(COALESCE(?mLabel, REPLACE(STR(?actual_material), "^.*#", "")) AS ?materialName)
-        
-        OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
-        OPTIONAL {{ ?supplier :hasName ?sName . }}
-        BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
-        
-        # Get SLA parameters
+        # Path 2: delivery performed by supplier directly (covers DamagedGoods / UnderShipment)
         OPTIONAL {{
-            {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
+            ?delivery :isPerformedBy ?perfSupplier .
+            FILTER NOT EXISTS {{ ?perfSupplier rdf:type :AlternativeSupplier . }}
+        }}
+        # Path 3: delivery fulfils a PO issued to the supplier
+        OPTIONAL {{
+            ?delivery :fulfills ?po .
+            ?po :issuedTo ?poSupplier .
+            FILTER NOT EXISTS {{ ?poSupplier rdf:type :AlternativeSupplier . }}
+            OPTIONAL {{ ?po :hasOrderedQuantity ?orderedQty . }}
+            OPTIONAL {{ ?po :hasTotalOrderCost ?totalCost . }}
+        }}
+
+        # Resolve the best available supplier
+        BIND(COALESCE(?supplier, ?perfSupplier, ?poSupplier) AS ?resolvedSupplier)
+        FILTER(BOUND(?resolvedSupplier))
+        FILTER NOT EXISTS {{ ?resolvedSupplier rdf:type :AlternativeSupplier . }}
+
+        # Resolve names
+        OPTIONAL {{ ?material rdfs:label ?mLabel . }}
+        BIND(COALESCE(?mLabel, IF(BOUND(?material), REPLACE(STR(?material), "^.*#", ""), "")) AS ?materialName)
+
+        OPTIONAL {{ ?resolvedSupplier rdfs:label ?sLabel . }}
+        OPTIONAL {{ ?resolvedSupplier :hasName ?sName . }}
+        BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?resolvedSupplier), "^.*#", "")) AS ?supplierName)
+
+        # SLA parameters from the resolved supplier
+        OPTIONAL {{
+            {{ ?resolvedSupplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?resolvedSupplier . }}
             OPTIONAL {{ ?sla :hasMissedItemPenaltyRate ?missedItemPenaltyRate . }}
             OPTIONAL {{ ?sla :hasQualityPenaltyRate ?qualityPenaltyRate . }}
         }}
-        OPTIONAL {{ ?supplier :penaltyRatePerDay ?delayPenaltyRate . }}
+        OPTIONAL {{ ?resolvedSupplier :penaltyRatePerDay ?delayPenaltyRate . }}
         OPTIONAL {{ ?delivery :hasDelayDuration ?delayDuration . }}
         OPTIONAL {{ ?delivery :hasDeliveredQuantity ?deliveredQty . }}
     }}
     """
+
     violations_res = graphdb.execute_sparql_select(violations_query)
 
     # Deduplicate violations by delivery URI
@@ -358,8 +387,16 @@ def get_compliance_alerts() -> list[dict]:
                 billable_days = max(0, actual_delay_days - 2)
                 penalty_owed = billable_days * rate
 
-        # leadTimeDays as int
-        lead_days = int(float(row.get("leadTimeDays", 0) or 0))
+        # leadTimeDays as int, fallback to SLA lead time (converted from hours to days)
+        lead_days_val = row.get("leadTimeDays")
+        if lead_days_val is not None:
+            lead_days = int(float(lead_days_val))
+        else:
+            sla_hours = row.get("slaLeadTimeHours")
+            if sla_hours is not None:
+                lead_days = max(1, int(float(sla_hours) / 24.0))
+            else:
+                lead_days = 14  # Safe default if no lead time is configured
 
         # SLA Compliance strictly evaluates contract adherence based on active breaches.
         # If there is no delay/violation, the contract is 100% compliant.
@@ -368,8 +405,13 @@ def get_compliance_alerts() -> list[dict]:
         else:
             if violation_type == "LateDelivery":
                 if lead_days > 0:
-                    severity = actual_delay_days / lead_days
-                    compliance = max(0, int((1.0 - severity) * 100))
+                    if actual_delay_days <= 2:
+                        # Slight drop for late but within grace period
+                        compliance = max(90, int((1.0 - (actual_delay_days / (lead_days * 2.0))) * 100))
+                    else:
+                        # Breaches grace period, drops faster based on delay severity relative to lead time
+                        severity = (actual_delay_days - 2) / lead_days
+                        compliance = max(0, int((1.0 - severity) * 90))
                 else:
                     compliance = 0
             elif violation_type == "UnderShipment":
@@ -379,7 +421,9 @@ def get_compliance_alerts() -> list[dict]:
                 else:
                     compliance = 70
             elif violation_type == "DamagedGoods":
-                compliance = 0  # Severe quality breach
+                # Use quality penalty rate to determine compliance (e.g. 10% penalty rate = 90% compliance)
+                rate = quality_penalty_rate if quality_penalty_rate is not None else 0.10
+                compliance = max(0, int((1.0 - rate) * 100))
             else:
                 compliance = 0
 
