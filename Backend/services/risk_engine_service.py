@@ -359,7 +359,7 @@ def router_node(state: RiskEngineState) -> RiskEngineState:
     if "SLAViolation" in active_risks:
         targets.add("Procurement Manager")
     if "ProductionDisruption" in active_risks:
-        targets.add("Procurement Manager")
+        targets.add("Production Manager")
         targets.add("Logistics Manager")
 
     state["target_managers"] = list(targets)
@@ -562,30 +562,39 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
         import time
 
         delivery_uri = _sanitize_uri_fragment(event.delivery_id)
-        raw_str = f"ML_{delivery_uri}_{title}_{int(time.time())}".encode("utf-8")
-        alert_id = "ALT_" + hashlib.md5(raw_str).hexdigest()[:8].upper()
+        
+        # Save a separate SystemAlert for each targeted manager
+        triples = []
+        for m_title, m_text in state["alerts"].items():
+            raw_str = f"ML_{delivery_uri}_{m_title}_{int(time.time())}".encode("utf-8")
+            alert_id = "ALT_" + hashlib.md5(raw_str).hexdigest()[:8].upper()
 
-        safe_title = title.replace('"', '\\"')
-        safe_text = alert_text.replace('"', '\\"')
+            safe_title = m_title.replace('"', '\\"')
+            safe_text = m_text.replace('"', '\\"')
 
-        insert_query = f"""
-        PREFIX : <http://example.org/ontology#>
-        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-        INSERT DATA {{
-            GRAPH <http://example.org/contracts/> {{
+            triples.append(f"""
                 :{alert_id} rdf:type :SystemAlert ;
                             :hasTitle "At-Risk Delivery — {safe_title}"^^xsd:string ;
                             :hasDesc "{safe_text}"^^xsd:string ;
                             :intendedFor "{safe_title}"^^xsd:string ;
                             :hasStatus "UNREAD"^^xsd:string ;
                             :triggeredBy :{delivery_uri} .
+            """)
+
+        if triples:
+            insert_query = f"""
+            PREFIX : <http://example.org/ontology#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            INSERT DATA {{
+                GRAPH <http://example.org/contracts/> {{
+                    {"".join(triples)}
+                }}
             }}
-        }}
-        """
-        graphdb.execute_sparql_update(insert_query)
-        logger.info("    Successfully saved ManagerAlert :%s into GraphDB.", alert_id)
+            """
+            graphdb.execute_sparql_update(insert_query)
+            logger.info("    Successfully saved %d ManagerAlert(s) into GraphDB.", len(triples))
     except Exception as exc:
-        logger.warning("    Failed to save ManagerAlert to GraphDB: %s", exc)
+        logger.warning("    Failed to save ManagerAlerts to GraphDB: %s", exc)
 
     return state
 
