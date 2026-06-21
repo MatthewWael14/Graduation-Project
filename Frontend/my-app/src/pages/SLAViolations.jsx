@@ -209,7 +209,7 @@ export default function SLAViolations({ user }) {
                 setSelected(null);
                 setPenalty(null);
               }}
-              style={{ ...S.select, border: `1px solid ${C.border}`, borderRadius: 6 }}
+              style={{ padding: "6px 12px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, outline: "none", cursor: "pointer" }}
             >
               <option value="ALL">All Suppliers</option>
               {Array.from(new Set(slaList.map(v => v.supplier))).filter(Boolean).sort().map(sup => (

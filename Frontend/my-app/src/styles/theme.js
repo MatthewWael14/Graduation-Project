@@ -2,7 +2,6 @@ export const C = {
   bg: "#0a0e1a",
   surface: "#111827",
   surface2: "#0f1929",
-  card: "#111827",          // alias for surface — used in control pill containers
   border: "#1e2d45",
   borderHi: "#2a4a6b",
   text: "#f1f5f9",
