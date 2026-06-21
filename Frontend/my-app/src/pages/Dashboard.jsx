@@ -66,7 +66,7 @@ function ErrorState({ message }) {
   );
 }
 
-export default function Dashboard({ user }) {
+export default function Dashboard({ user, onNavigate }) {
   const cfg = ROLE_CFG[user?.role] || ROLE_CFG.admin;
 
   const [riskScores, setRiskScores] = useState([]);
@@ -131,6 +131,7 @@ export default function Dashboard({ user }) {
       score: Math.round(scoreVal * 100),
       countryCode: (s.country || "GL").substring(0, 2).toUpperCase(),
       risk: scoreVal >= 0.8 ? "LOW" : scoreVal >= 0.5 ? "MEDIUM" : "HIGH",
+      material: s.material || s.materialLabel || "",
     };
   }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 6);
 
@@ -179,7 +180,7 @@ export default function Dashboard({ user }) {
             ) : riskPanelData.length === 0 ? (
               <div style={S.card}><EmptyState message="No risk data returned from Knowledge Graph" /></div>
             ) : (
-              <RiskPanel risks={riskPanelData} />
+              <RiskPanel risks={riskPanelData} onNavigate={onNavigate} />
             )}
           </div>
         )}
@@ -193,7 +194,7 @@ export default function Dashboard({ user }) {
             ) : reliabilityData.length === 0 ? (
               <div style={S.card}><EmptyState message="No suppliers to chart" /></div>
             ) : (
-              <ReliabilityChart suppliers={reliabilityData} />
+              <ReliabilityChart suppliers={reliabilityData} onNavigate={onNavigate} />
             )}
           </div>
         )}
@@ -206,7 +207,7 @@ export default function Dashboard({ user }) {
           ) : slaTableData.length === 0 ? (
             <div style={S.card}><EmptyState message="No SLA data returned from Knowledge Graph" /></div>
           ) : (
-            <SLAViolationsTable data={slaTableData} />
+            <SLAViolationsTable data={slaTableData} onNavigate={onNavigate} />
           )}
         </div>
       )}
