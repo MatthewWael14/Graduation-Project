@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
-import { fetchRiskScores, predictOrderRisk, placeOrder } from "../services/api";
+import { fetchRiskScores, predictOrderRisk, placeOrder, fetchOrderContext } from "../services/api";
 
 export default function OrderPlanning({ user }) {
   const [supplierMaterials, setSupplierMaterials] = useState([]);
@@ -13,11 +13,15 @@ export default function OrderPlanning({ user }) {
   // Form states
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [selectedMaterial, setSelectedMaterial] = useState("");
-  const [quantity, setQuantity] = useState(500);
-  const [unitPrice, setUnitPrice] = useState(15.0);
+  const [quantity, setQuantity] = useState("");
+  const [unitPrice, setUnitPrice] = useState("");
   const [poDate, setPoDate] = useState(new Date().toISOString().split("T")[0]);
   const [poType, setPoType] = useState("Standard");
   const [department, setDepartment] = useState("Operations");
+
+  // SLA Context state
+  const [slaContext, setSlaContext] = useState(null);
+  const [loadingContext, setLoadingContext] = useState(false);
 
   // Prediction/Action states
   const [evaluating, setEvaluating] = useState(false);
@@ -49,15 +53,44 @@ export default function OrderPlanning({ user }) {
       setMaterials([]);
       setSelectedMaterial("");
     }
+    setSlaContext(null);
     setPredictionResult(null);
     setSuccessMessage("");
   }, [selectedSupplier, supplierMaterials]);
 
-  // Reset prediction result when input fields change
+  // Fetch SLA context from GraphDB when supplier and material are both selected
+  useEffect(() => {
+    if (selectedSupplier && selectedMaterial) {
+      setLoadingContext(true);
+      setError("");
+      setSlaContext(null);
+      
+      fetchOrderContext(selectedSupplier, selectedMaterial)
+        .then(res => {
+          if (res.status === "success" && res.context) {
+            setSlaContext(res.context);
+            // Autofill the input fields with contract-grade pre-negotiated defaults
+            setQuantity(res.context.quantity || 500);
+            setUnitPrice(res.context.unit_cost || 15.0);
+          }
+        })
+        .catch(err => {
+          console.error("Failed to load SLA context:", err);
+          setError(`Failed to retrieve contract terms from GraphDB: ${err.message}`);
+        })
+        .finally(() => setLoadingContext(false));
+    } else {
+      setSlaContext(null);
+    }
+    setPredictionResult(null);
+    setSuccessMessage("");
+  }, [selectedSupplier, selectedMaterial]);
+
+  // Reset prediction result/success message when values change
   useEffect(() => {
     setPredictionResult(null);
     setSuccessMessage("");
-  }, [selectedMaterial, quantity, unitPrice, poDate, poType, department]);
+  }, [poDate, poType, department]);
 
   const handleEvaluateRisk = async (e) => {
     e.preventDefault();
@@ -109,8 +142,12 @@ export default function OrderPlanning({ user }) {
       const res = await placeOrder(payload);
       if (res.status === "success") {
         setSuccessMessage(`Order placed successfully! Generated Delivery ID: ${res.delivery_id}`);
-        // Reset prediction so they don't double click
+        // Reset inputs and context states to force fresh flow
         setPredictionResult(null);
+        setSelectedSupplier("");
+        setSelectedMaterial("");
+        setQuantity("");
+        setUnitPrice("");
       } else {
         setError(`Failed to place order: ${res.message || "Unknown error"}`);
       }
@@ -121,12 +158,18 @@ export default function OrderPlanning({ user }) {
     }
   };
 
+  // Determine if the proposed form inputs deviate from SLA baseline
+  const isDeviating = slaContext && (
+    (quantity && parseInt(quantity, 10) !== slaContext.quantity) ||
+    (unitPrice && parseFloat(unitPrice) !== slaContext.unit_cost)
+  );
+
   return (
     <div>
       <div style={{ ...S.pageHeader, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         <div>
           <div style={S.pageTitle}>Order Planning & Risk Predictor</div>
-          <div style={S.pageDesc}>Evaluate procurement delay risks with ML before placing orders, then commit them to GraphDB</div>
+          <div style={S.pageDesc}>Evaluate procurement delay risks with ML before placing orders, using the SLA as a live operational constraint</div>
         </div>
       </div>
 
@@ -151,7 +194,12 @@ export default function OrderPlanning({ user }) {
         <div style={S.grid2}>
           {/* Left: Input Form */}
           <div style={S.card}>
-            <div style={{ ...S.cardTitle, marginBottom: 18 }}>📋 Proposed Order Details</div>
+            <div style={{ ...S.cardHeader, marginBottom: 18 }}>
+              <span style={S.cardTitle}>📋 Proposed Order Form</span>
+              {slaContext && (
+                <span style={S.badge(C.green)}>🔗 SLA Active Constraint</span>
+              )}
+            </div>
             
             <form onSubmit={handleEvaluateRisk}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
@@ -187,18 +235,41 @@ export default function OrderPlanning({ user }) {
                 </div>
               </div>
 
+              {/* Maverick Spend Warning Banner */}
+              {isDeviating && (
+                <div style={{
+                  padding: "10px 14px",
+                  background: C.orange + "15",
+                  border: `1px solid ${C.orange}44`,
+                  borderRadius: 8,
+                  fontSize: 12,
+                  color: C.orange,
+                  marginBottom: 14,
+                  lineHeight: 1.4,
+                  fontWeight: 500
+                }}>
+                  ⚠ <strong>Maverick Spend Alert (Deviation):</strong> Proposed values do not match contract terms (Pre-negotiated Price: <strong>${slaContext.unit_cost}</strong>, Quantity: <strong>{slaContext.quantity}</strong>). Diverging from contract-grade pricing violates policy and alters ML prediction context.
+                </div>
+              )}
+
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
                 <div>
                   <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600 }}>Quantity</label>
                   <input
                     type="number"
-                    value={quantity || ""}
+                    value={quantity}
                     onChange={(e) => setQuantity(e.target.value ? parseInt(e.target.value, 10) : "")}
                     placeholder="SLA Default Template"
                     min="1"
-                    style={S.input}
+                    required
+                    disabled={loadingContext || !selectedMaterial}
+                    style={{ ...S.input, opacity: selectedMaterial ? 1 : 0.5 }}
                   />
-                  <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Leave blank to pull SLA default</div>
+                  {slaContext && (
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
+                      SLA Contracted: <strong>{slaContext.quantity}</strong> units
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -206,13 +277,19 @@ export default function OrderPlanning({ user }) {
                   <input
                     type="number"
                     step="0.01"
-                    value={unitPrice || ""}
+                    value={unitPrice}
                     onChange={(e) => setUnitPrice(e.target.value ? parseFloat(e.target.value) : "")}
                     placeholder="SLA Default Template"
                     min="0"
-                    style={S.input}
+                    required
+                    disabled={loadingContext || !selectedMaterial}
+                    style={{ ...S.input, opacity: selectedMaterial ? 1 : 0.5 }}
                   />
-                  <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Leave blank to pull SLA default</div>
+                  {slaContext && (
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
+                      SLA Contracted: <strong>${slaContext.unit_cost.toFixed(2)}</strong>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -271,13 +348,56 @@ export default function OrderPlanning({ user }) {
             </form>
           </div>
 
-          {/* Right: Risk Analysis Result & Placement */}
+          {/* Right: Contract Baseline & ML Prediction Report */}
           <div style={S.card}>
-            <div style={{ ...S.cardTitle, marginBottom: 18 }}>📊 Prediction Report</div>
+            <div style={{ ...S.cardTitle, marginBottom: 18 }}>📊 Prediction Report & Contract Baseline</div>
 
-            {!predictionResult && !evaluating && (
+            {loadingContext && (
+              <div style={{ textAlign: "center", padding: "80px 20px", color: C.accent, fontSize: 14 }}>
+                <div style={{ fontSize: 24, marginBottom: 12 }} className="spin">⚙</div>
+                <div>Fetching pre-negotiated terms from GraphDB...</div>
+              </div>
+            )}
+
+            {!predictionResult && !evaluating && !loadingContext && !slaContext && (
               <div style={{ textAlign: "center", padding: "80px 20px", color: C.muted, fontSize: 14 }}>
-                Fill out the order details and click "Evaluate Proposed Order Risk" to run risk prediction.
+                Select a Supplier and Material to load their pre-negotiated SLA constraints and execute risk predictions.
+              </div>
+            )}
+
+            {/* Display SLA Baseline when loaded */}
+            {slaContext && !loadingContext && !evaluating && !predictionResult && (
+              <div>
+                <div style={{ padding: "16px 20px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 20 }}>
+                  <h3 style={{ fontSize: 14, color: C.accent, fontWeight: 700, marginTop: 0, marginBottom: 12 }}>🛡 Active SLA Contract Baseline</h3>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "10px 20px", fontSize: 13 }}>
+                    <div><span style={{ color: C.muted }}>Supplier:</span></div>
+                    <div><strong style={{ color: C.text }}>{slaContext.supplierName || selectedSupplier}</strong></div>
+
+                    <div><span style={{ color: C.muted }}>Material:</span></div>
+                    <div><strong style={{ color: C.text }}>{slaContext.materialLabel || selectedMaterial}</strong></div>
+
+                    <div><span style={{ color: C.muted }}>Contract Lead Time:</span></div>
+                    <div><strong style={{ color: C.text }}>{slaContext.leadTimeDays} days</strong></div>
+
+                    <div><span style={{ color: C.muted }}>Pre-Negotiated Quantity:</span></div>
+                    <div><strong style={{ color: C.text }}>{slaContext.quantity} units</strong></div>
+
+                    <div><span style={{ color: C.muted }}>Contracted Unit Cost:</span></div>
+                    <div><strong style={{ color: C.text }}>${slaContext.unit_cost.toFixed(2)}</strong></div>
+
+                    <div><span style={{ color: C.muted }}>Supplier Reliability score:</span></div>
+                    <div>
+                      <strong style={{ color: slaContext.esgScore >= 70 ? C.green : C.orange }}>
+                        {(slaContext.esgScore).toFixed(0)}/100
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ textAlign: "center", color: C.muted, fontSize: 12, padding: "10px" }}>
+                  Form fields pre-filled from this SLA contract. Adjust inputs if needed, then click "Evaluate Proposed Order Risk" to assess disruption risks.
+                </div>
               </div>
             )}
 
@@ -289,7 +409,7 @@ export default function OrderPlanning({ user }) {
               </div>
             )}
 
-            {predictionResult && (
+            {predictionResult && !evaluating && !loadingContext && (
               <div>
                 {/* Reliability gauge */}
                 <div style={{ padding: "16px 20px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 16 }}>

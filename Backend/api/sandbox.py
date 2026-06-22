@@ -300,20 +300,43 @@ async def simulate_iot_event(event: IoTTelemetryEvent):
 
 @router.post("/predict-order-risk", response_model=OrderRiskPredictionResponse)
 async def predict_order_planning_risk(request: OrderRiskPredictionRequest):
-    """
-    Evaluates risk of a proposed purchase order before placing it using the static ML model.
-    """
-    logger.info("Evaluating order planning risk for supplier: %s, material: %s", request.supplier_id, request.material_id)
-    try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, predict_order_risk, request)
-        return result
-    except Exception as exc:
-        logger.error("Order risk assessment crashed: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Order risk evaluation failed: {exc}",
-        )
+  """
+  Evaluates risk of a proposed purchase order before placing it using the static ML model.
+  """
+  logger.info("Evaluating order planning risk for supplier: %s, material: %s", request.supplier_id, request.material_id)
+  try:
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, predict_order_risk, request)
+    return result
+  except Exception as exc:
+    logger.error("Order risk assessment crashed: %s", exc)
+    raise HTTPException(
+      status_code=500,
+      detail=f"Order risk evaluation failed: {exc}",
+    )
+
+
+@router.get("/order-context")
+async def get_order_context_endpoint(supplier_id: str, material_id: str):
+  """
+  Retrieves the pre-negotiated SLA terms (quantity, unit cost, lead time, etc.)
+  for a given supplier and material from GraphDB.
+  """
+  from services.order_risk_service import query_order_context
+  logger.info("Fetching order context for supplier: %s, material: %s", supplier_id, material_id)
+  try:
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, query_order_context, supplier_id, material_id)
+    return {
+      "status": "success",
+      "context": result
+    }
+  except Exception as exc:
+    logger.error("Failed to query order context: %s", exc)
+    raise HTTPException(
+      status_code=500,
+      detail=f"Failed to retrieve contract context: {exc}"
+    )
 
 
 @router.post("/place-order")

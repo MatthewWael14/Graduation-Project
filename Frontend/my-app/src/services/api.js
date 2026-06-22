@@ -145,6 +145,13 @@ export async function predictOrderRisk(payload) {
   });
 }
 
+// GET /api/sandbox/order-context
+export async function fetchOrderContext(supplierId, materialId) {
+  return safeFetch(
+    `${BASE}/api/sandbox/order-context?supplier_id=${encodeURIComponent(supplierId)}&material_id=${encodeURIComponent(materialId)}`
+  );
+}
+
 // POST /api/sandbox/place-order
 export async function placeOrder(payload) {
   return safeFetch(`${BASE}/api/sandbox/place-order`, {
