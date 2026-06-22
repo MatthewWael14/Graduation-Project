@@ -75,7 +75,7 @@ def query_order_context(supplier_id: str, material_id: str) -> dict:
     SELECT ?poType ?supplierRegion ?supplierTier ?paymentTerms ?materialLabel
            ?unitOfMeasure ?hasUnitCost ?discountPct ?taxPct ?savingsPct ?leadTimeDays 
            ?department ?contractType ?maverickSpend ?singleSourceFlag 
-           ?preferredSupplier ?localInternational ?esgScore ?hasCurrency
+           ?preferredSupplier ?localInternational ?esgScore ?hasCurrency ?hasOrderedQuantity
     WHERE {{
         {sup_ref} a :Supplier .
         {mat_ref} a :RawMaterial .
@@ -91,6 +91,10 @@ def query_order_context(supplier_id: str, material_id: str) -> dict:
         OPTIONAL {{ {sup_ref} :hasReliabilityScore ?esgScore }}
         OPTIONAL {{ {sup_ref} :leadTimeDays ?leadTimeDays }}
         OPTIONAL {{ {sup_ref} :penaltyClause ?penaltyRate }}
+        
+        # Get SLA properties from material directly
+        OPTIONAL {{ {mat_ref} :hasUnitCost ?hasUnitCost }}
+        OPTIONAL {{ {mat_ref} :hasOrderedQuantity ?hasOrderedQuantity }}
         
         # Fallback to existing delivery events to fetch region/type defaults if present
         OPTIONAL {{
@@ -137,15 +141,35 @@ def query_order_context(supplier_id: str, material_id: str) -> dict:
             "preferredSupplier": "Yes",
             "localInternational": "Local",
             "esgScore": 75.0,
-            "hasCurrency": "GBP"
+            "hasCurrency": "GBP",
+            "unit_cost": 15.0,
+            "quantity": 500
         }
     
     row = results[0]
+    
+    # Safely parse supplier tier from string ("Low", "Medium", "High") or numeric representation
+    raw_tier = row.get("supplierTier")
+    supplier_tier = 1  # default
+    if raw_tier:
+        raw_tier_str = str(raw_tier).strip().lower()
+        if raw_tier_str == "low":
+            supplier_tier = 1
+        elif raw_tier_str == "medium":
+            supplier_tier = 2
+        elif raw_tier_str == "high":
+            supplier_tier = 3
+        else:
+            try:
+                supplier_tier = int(float(raw_tier))
+            except (ValueError, TypeError):
+                supplier_tier = 1
+
     # Build clean output dictionary with type-casting and defaults
     context = {
         "poType": row.get("poType", "Standard"),
         "supplierRegion": row.get("supplierRegion", "Europe"),
-        "supplierTier": int(float(row.get("supplierTier", 1))) if row.get("supplierTier") else 1,
+        "supplierTier": supplier_tier,
         "paymentTerms": row.get("paymentTerms", "Net 30"),
         "materialLabel": row.get("materialLabel", "Steel Sheet (kg)"),
         "unitOfMeasure": row.get("unitOfMeasure", "KG"),
@@ -160,7 +184,9 @@ def query_order_context(supplier_id: str, material_id: str) -> dict:
         "preferredSupplier": row.get("preferredSupplier", "Yes"),
         "localInternational": row.get("localInternational", "Local"),
         "esgScore": float(row.get("esgScore", 75.0)),
-        "hasCurrency": row.get("hasCurrency", "GBP")
+        "hasCurrency": row.get("hasCurrency", "GBP"),
+        "unit_cost": float(row.get("hasUnitCost")) if row.get("hasUnitCost") else None,
+        "quantity": int(float(row.get("hasOrderedQuantity"))) if row.get("hasOrderedQuantity") else None
     }
     return context
 
@@ -172,9 +198,10 @@ def predict_order_risk(request: OrderRiskPredictionRequest) -> OrderRiskPredicti
     # 1. Fetch GraphDB context
     context = query_order_context(request.supplier_id, request.material_id)
 
-    # 2. Extract and overwrite values with request params
-    qty = request.quantity
-    price = request.unit_price
+    # 2. Extract values: prioritize verified SLA contract values from GraphDB,
+    # falling back to request parameters (if provided) or sensible system defaults.
+    qty = context.get("quantity") or request.quantity or 500
+    price = context.get("unit_cost") or request.unit_price or 15.0
     po_type = request.po_type
     dept = request.department
     

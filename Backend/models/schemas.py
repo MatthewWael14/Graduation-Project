@@ -8,8 +8,10 @@
 # ============================================================
 
 import uuid
+from typing import Optional
 
 from pydantic import BaseModel, Field
+
 
 
 class SLAContract(BaseModel):
@@ -399,14 +401,14 @@ class OrderRiskPredictionRequest(BaseModel):
         examples=["Material_Steel_Sheet"],
         description="Unique identifier (URI or ID) of the raw material in GraphDB"
     )
-    quantity: int = Field(
-        ...,
+    quantity: Optional[int] = Field(
+        default=None,
         ge=1,
         examples=[500],
         description="Proposed order quantity"
     )
-    unit_price: float = Field(
-        ...,
+    unit_price: Optional[float] = Field(
+        default=None,
         ge=0.0,
         examples=[6.55],
         description="Proposed unit price"
