@@ -3,6 +3,7 @@ import Layout        from "./components/layout/Layout";
 import Login         from "./pages/Login";
 import Dashboard     from "./pages/Dashboard";
 import SLAUpload     from "./pages/SLAUpload";
+import OrderPlanning from "./pages/OrderPlanning";
 import InventoryRisk from "./pages/InventoryRisk";
 import Suppliers     from "./pages/Suppliers";
 import SLAViolations from "./pages/SLAViolations";
@@ -37,6 +38,7 @@ export default function App() {
     switch (activePage) {
       case "dashboard":  return <Dashboard      {...props} />;
       case "sla":        return <SLAUpload      {...props} />;
+      case "planning":   return <OrderPlanning  {...props} />;
       case "inventory":  return <InventoryRisk  {...props} />;
       case "suppliers":  return <Suppliers      {...props} />;
       case "violations": return <SLAViolations  {...props} />;

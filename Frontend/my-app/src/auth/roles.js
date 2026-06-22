@@ -6,9 +6,9 @@ export const USERS = [
 ];
 
 export const ROLE_PAGES = {
-  admin:       ["dashboard","sla","inventory","suppliers","violations","ai","alerts"],
+  admin:       ["dashboard","sla","planning","inventory","suppliers","violations","ai","alerts"],
   logistics:   ["dashboard","inventory","suppliers","violations","alerts","ai"],
-  procurement: ["dashboard","sla","violations","alerts","ai"],
+  procurement: ["dashboard","sla","planning","violations","alerts","ai"],
   production:  ["dashboard","violations","alerts","ai"],
 };
 

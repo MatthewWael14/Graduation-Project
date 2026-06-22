@@ -11,6 +11,7 @@ import { C } from "../styles/theme";
 export const NAV = [
   { id: "dashboard",  label: "Dashboard",       icon: "◈", dot: C.orange },
   { id: "sla",        label: "SLA Upload",       icon: "◉", dot: C.purple },
+  { id: "planning",   label: "Order Planning",   icon: "📋", dot: C.green  },
   { id: "inventory",  label: "Inventory Risk",   icon: "⬢", dot: C.red    },
   { id: "suppliers",  label: "Suppliers",        icon: "◎", dot: C.green  },
   { id: "violations", label: "SLA Violations",   icon: "◆", dot: C.orange },
@@ -21,6 +22,7 @@ export const NAV = [
 export const PAGE_TITLES = {
   dashboard:  "Dashboard · Mission Control",
   sla:        "SLA Upload · LLM Parser",
+  planning:   "Order Planning · Risk Predictor",
   inventory:  "Inventory Risk · Traffic Light",
   suppliers:  "Suppliers · Directory",
   violations: "SLA Violations · Penalty Calculator",

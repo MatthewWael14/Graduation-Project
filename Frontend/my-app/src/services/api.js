@@ -137,6 +137,22 @@ export async function confirmSLA(confirmedData) {
   });
 }
 
+// POST /api/sandbox/predict-order-risk
+export async function predictOrderRisk(payload) {
+  return safeFetch(`${BASE}/api/sandbox/predict-order-risk`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// POST /api/sandbox/place-order
+export async function placeOrder(payload) {
+  return safeFetch(`${BASE}/api/sandbox/place-order`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 // POST /api/sandbox/upload-transactions
 export async function uploadTransactions(file) {
   const form = new FormData();
