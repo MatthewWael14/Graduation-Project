@@ -27,6 +27,7 @@ from knowledge_base.repository import (
     PREFIXES,
     _sanitize_uri_fragment,
     create_contract_graph,
+    get_material_process,
 )
 from models.schemas import ConfirmedSLA, ExtractedSLAData, SLAContract
 
@@ -264,6 +265,10 @@ INSERT DATA {{
             f"Missed item penalty: ${data.missed_item_penalty_rate}/unit. "
             f"Quality penalty: {data.quality_penalty_rate * 100}% of order value."
         )
+        
+        # Automatically look up process mapping for known materials
+        impacted_process = get_material_process(data.material)
+
         return SLAContract(
             supplier_name=data.supplier_name,
             material=data.material,
@@ -271,6 +276,7 @@ INSERT DATA {{
             penalty_clause=penalty_clause,
             quantity=data.quantity,
             unit_cost=data.unit_cost,
+            impacted_process=impacted_process,
         )
 
     # ----------------------------------------------------------

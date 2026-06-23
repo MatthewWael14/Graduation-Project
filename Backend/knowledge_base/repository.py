@@ -18,8 +18,11 @@
 # ============================================================
 
 from datetime import datetime
+import logging
 from knowledge_base.connection import graphdb
 from models.schemas import SLAContract
+
+logger = logging.getLogger(__name__)
 
 # ---- Shared Namespace Prefix Block ----
 # This prefix block is prepended to every SPARQL query to
@@ -301,6 +304,39 @@ def find_impacted_products_by_supplier_delay() -> list[dict]:
     """
 
     return graphdb.execute_sparql_select(sparql_query)
+
+
+def get_material_process(material_name: str) -> str | None:
+    """
+    Look up the production process/assembly line affected by the material in GraphDB.
+    """
+    if not material_name:
+        return None
+    material_uri = _sanitize_uri_fragment(material_name)
+    query = f"""
+    {PREFIXES}
+    SELECT ?process
+    WHERE {{
+        {{ :{material_uri} :affectsProcess ?process . }}
+        UNION
+        {{ ?material :affectsProcess ?process .
+           ?material rdfs:label ?label .
+           FILTER(LCASE(STR(?label)) = LCASE("{material_name}"))
+        }}
+    }}
+    LIMIT 1
+    """
+    try:
+        results = graphdb.execute_sparql_select(query)
+        if results and results[0].get("process"):
+            process_uri = results[0]["process"]
+            # Extract the local name fragment (e.g. from http://example.org/ontology#EV_Battery_Assembly_Line)
+            if "#" in process_uri:
+                return process_uri.split("#")[-1]
+            return process_uri
+    except Exception as e:
+        logger.error(f"Failed to look up material process for {material_name}: {e}")
+    return None
 
 
 def get_active_suppliers() -> list[dict]:
