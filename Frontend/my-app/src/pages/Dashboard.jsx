@@ -76,23 +76,38 @@ export default function Dashboard({ user }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const load = async () => {
+    let cancelled = false;
+
+    const load = async (isFirstLoad) => {
       try {
         const [scores, alerts, kpiData] = await Promise.all([
           fetchRiskScores(),
           fetchComplianceAlerts(),
           fetchKPIs(),
         ]);
+        if (cancelled) return;
         setRiskScores(scores);
         setSlaAlerts(alerts);
         setKpis(kpiData);
+        setError("");
       } catch (err) {
-        setError(err.message);
+        if (!cancelled) setError(err.message);
       } finally {
-        setLoading(false);
+        if (!cancelled && isFirstLoad) setLoading(false);
       }
     };
-    load();
+
+    load(true);
+
+    // Keep KPIs, risk scores, and compliance alerts live as the
+    // background telemetry simulator produces new disruption/SLA
+    // events, without requiring a manual page refresh.
+    const intervalId = setInterval(() => load(false), 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, []);
 
   const kpiCards = buildKpiCards(kpis);

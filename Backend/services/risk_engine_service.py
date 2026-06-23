@@ -270,6 +270,70 @@ Return a structured risk assessment with the following:
 - ``reasoning``: brief explanation of the analysis.
 """
 
+# Reason codes that DO qualify a delay as an SLAViolation per the
+# team lead's rule: only carrier-fault or customs-related delays
+# count as contractual SLA breaches. A delay caused by weather/
+# transport conditions or general port congestion is treated as an
+# operational DelayEvent only — it does not trigger penalty exposure,
+# since it isn't attributable to a breach of the supplier's
+# contractual obligations.
+_SLA_VIOLATION_REASON_CODES = {
+    "Carrier_Issue",
+    "CustomsDelay",
+    "Customs_Hold",
+    "Customs_Delay",
+}
+
+# Reason codes explicitly excluded from SLAViolation, even if the LLM
+# (or an upstream ontology rule) suggests otherwise — kept as an
+# explicit denylist so the intent is unambiguous in code review, not
+# just "anything not in the allow-list".
+_NON_SLA_VIOLATION_REASON_CODES = {
+    "Transport/Weather",
+    "Weather_Delay",
+    "Port_Congestion",
+    "PortCongestion",
+}
+
+
+def _apply_reason_code_sla_rule(risks: list[str], reason_code: str) -> list[str]:
+    """
+    Deterministically enforce the team lead's SLA-violation rule:
+    a delay only counts as :SLAViolation when its reason_code
+    indicates carrier fault or customs hold. Weather/transport and
+    port-congestion delays are real DelayEvents, but not contractual
+    breaches, so :SLAViolation is stripped from the LLM's risk list
+    if present for those reason codes.
+
+    This mirrors the existing pattern of overriding the LLM's free
+    financial_penalty_estimate with a deterministic formula — the
+    LLM's classification is a useful signal, but the actual business
+    rule must be enforced in code, not left to vary across calls.
+    """
+    if "SLAViolation" not in risks:
+        return risks
+
+    if reason_code in _NON_SLA_VIOLATION_REASON_CODES:
+        logger.info(
+            "    Reason code '%s' is not SLA-violation-eligible (weather/congestion) — "
+            "stripping SLAViolation from risk list.",
+            reason_code,
+        )
+        return [r for r in risks if r != "SLAViolation"]
+
+    if reason_code not in _SLA_VIOLATION_REASON_CODES:
+        # Unknown/unmapped reason code — log it for visibility, but
+        # don't silently strip a risk the LLM/ontology flagged unless
+        # we positively know it's excluded. Conservative default:
+        # keep SLAViolation rather than risk under-alerting.
+        logger.info(
+            "    Reason code '%s' is not in the known SLA-violation allow-list; "
+            "keeping SLAViolation since it isn't on the explicit exclusion list either.",
+            reason_code,
+        )
+
+    return risks
+
 
 def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
     """
@@ -315,6 +379,12 @@ def risk_analyst_node(state: RiskEngineState) -> RiskEngineState:
         # Override the LLM's freely-estimated penalty with the deterministic formula.
         # The LLM tends to skip the grace period and uses the full delay days.
         analysis.financial_penalty_estimate = calculated_penalty
+
+        # Enforce the team lead's reason-code rule: SLAViolation only
+        # applies for carrier/customs-fault delays, never weather or
+        # port-congestion delays — see _apply_reason_code_sla_rule().
+        analysis.risks = _apply_reason_code_sla_rule(analysis.risks, event.reason_code)
+
         logger.info(
             "    Analysis: risks=%s | severity=%s | confidence=%.2f | penalty=$%.2f (%.1f billable days × $%.0f/day)",
             analysis.risks,
@@ -519,6 +589,26 @@ def _build_alert_text(event: IoTTelemetryEvent, ctx: dict[str, Any],
     return " ".join(parts)
 
 
+def _escape_sparql_string(value: str) -> str:
+    """
+    Escape a Python string for safe embedding inside a SPARQL string
+    literal ("...") in an INSERT DATA block. Handles backslashes,
+    quotes, newlines, tabs, and carriage returns — a bare
+    .replace('"', '\\"') lets real LLM-generated text (which often
+    contains newlines and markdown) through as raw control
+    characters, breaking the query with a "Lexical error" at parse
+    time. Backslashes are escaped FIRST, before quotes/newlines, so
+    later substitutions don't double-escape already-touched characters.
+    """
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
 def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
     """
     Node 7 — Alert Finalizer.
@@ -562,15 +652,22 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
         import time
 
         delivery_uri = _sanitize_uri_fragment(event.delivery_id)
-        
+
         # Save a separate SystemAlert for each targeted manager
         triples = []
         for m_title, m_text in state["alerts"].items():
             raw_str = f"ML_{delivery_uri}_{m_title}_{int(time.time())}".encode("utf-8")
             alert_id = "ALT_" + hashlib.md5(raw_str).hexdigest()[:8].upper()
 
-            safe_title = m_title.replace('"', '\\"')
-            safe_text = m_text.replace('"', '\\"')
+            # Use the full SPARQL string escaper (handles backslashes,
+            # quotes, AND newlines/tabs) instead of a bare quote-only
+            # .replace() — real LLM-generated alert text routinely
+            # contains newlines and markdown, which a quote-only
+            # escape lets through as raw control characters, breaking
+            # the query with a "Lexical error" at parse time.
+            safe_title = _escape_sparql_string(m_title)
+            safe_text = _escape_sparql_string(m_text)
+            safe_severity = _escape_sparql_string(analysis.severity or "Low")
 
             triples.append(f"""
                 :{alert_id} rdf:type :SystemAlert ;
@@ -578,6 +675,7 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
                             :hasDesc "{safe_text}"^^xsd:string ;
                             :intendedFor "{safe_title}"^^xsd:string ;
                             :hasStatus "UNREAD"^^xsd:string ;
+                            :hasSeverity "{safe_severity}"^^xsd:string ;
                             :triggeredBy :{delivery_uri} .
             """)
 

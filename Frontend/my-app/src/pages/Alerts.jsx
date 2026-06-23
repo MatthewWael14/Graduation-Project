@@ -21,10 +21,37 @@ export default function Alerts({ user }) {
   const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
-    fetchAlerts()
-      .then(data => setAlerts(data))
-      .catch(err => setFetchError(err.message))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    const load = (isFirstLoad) => {
+      fetchAlerts()
+        .then(data => {
+          if (cancelled) return;
+          setAlerts(data);
+          setFetchError("");
+        })
+        .catch(err => {
+          if (cancelled) return;
+          // Don't blank the list on a transient poll failure — only
+          // surface the error banner, keep showing the last good data.
+          setFetchError(err.message);
+        })
+        .finally(() => {
+          if (!cancelled && isFirstLoad) setLoading(false);
+        });
+    };
+
+    load(true);
+
+    // Poll for new real-time alerts (production disruptions, SLA
+    // violations, etc.) every 5s so managers see them without a
+    // manual page refresh.
+    const intervalId = setInterval(() => load(false), 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, []);
 
   const markRead = async (id) => {

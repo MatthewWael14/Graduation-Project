@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.dashboard import router as dashboard_router
 from api.sandbox import router as sandbox_router
+from services.telemetry_simulator_service import start_simulator, stop_simulator
 
 # --------------- App Initialization ---------------
 app = FastAPI(
@@ -38,28 +39,28 @@ app.include_router(dashboard_router)
 
 
 # --------------- Lifecycle Events ---------------
-# NOTE: SPARQLWrapper is stateless (Golden Rule #1).
-# There is NO persistent connection to close on shutdown.
-# We keep the event hook as a placeholder for future
-# cleanup tasks (e.g., clearing caches, flushing logs).
 @app.on_event("startup")
 def startup_event():
-    """Run semantic enrichment query on startup to populate shortcuts."""
-    from services.dashboard_service import run_semantic_enrichment
-    try:
-        run_semantic_enrichment()
-    except Exception as e:
-        print(f"Failed to run startup semantic enrichment: {e}")
+    """
+    Launches the background telemetry simulator, which continuously
+    generates real-time IoT delivery events and feeds them through
+    the risk engine pipeline (GraphDB injection -> risk analysis ->
+    multi-manager alert generation -> persistence). Controlled via
+    the TELEMETRY_INTERVAL_SECONDS env var (default 30s).
+    """
+    start_simulator()
 
 
+# NOTE: SPARQLWrapper is stateless (Golden Rule #1).
+# There is NO persistent connection to close on shutdown.
 @app.on_event("shutdown")
 def shutdown_event():
     """
-    Placeholder for shutdown cleanup.
-    GraphDB connections via SPARQLWrapper are stateless HTTP
-    requests — no socket pool or driver to close.
+    Stops the background telemetry simulator cleanly. GraphDB
+    connections via SPARQLWrapper are stateless HTTP requests — no
+    socket pool or driver to close.
     """
-    pass
+    stop_simulator()
 
 
 # --------------- Root Health-Check ---------------
