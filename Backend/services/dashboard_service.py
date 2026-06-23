@@ -762,13 +762,14 @@ def get_alerts() -> list[dict]:
     """
     query = f"""
     {PREFIXES}
-    SELECT ?alertId ?title ?desc ?intendedFor ?status
+    SELECT ?alertId ?title ?desc ?intendedFor ?status ?severity
     WHERE {{
         ?alert rdf:type :SystemAlert ;
                :hasTitle ?title ;
                :hasDesc ?desc ;
                :intendedFor ?intendedFor ;
                :hasStatus ?status .
+        OPTIONAL {{ ?alert :hasSeverity ?severity . }}
         BIND(REPLACE(STR(?alert), "^.*#", "") AS ?alertId)
     }}
     ORDER BY DESC(?alertId)
@@ -782,6 +783,7 @@ def get_alerts() -> list[dict]:
         desc = r.get("desc")
         status = r.get("status")
         intended_for = r.get("intendedFor", "")
+        severity = r.get("severity", "LOW")
 
         if status == "DISMISSED":
             continue
@@ -798,10 +800,18 @@ def get_alerts() -> list[dict]:
         icon = "🚨" if "Production" in intended_for else "🚚" if "Logistics" in intended_for else "📝"
         category = "Inventory" if "Production" in intended_for else "SLA Breach"
 
+        # Map BNode / GraphDB severity values to frontend alert types (CRITICAL, HIGH, INFO, LOW)
+        alert_type = str(severity).upper()
+        if alert_type not in ("CRITICAL", "HIGH", "INFO", "LOW", "ESCALATION"):
+            if alert_type == "MEDIUM":
+                alert_type = "HIGH"
+            else:
+                alert_type = "LOW"
+
         alerts.append({
             "id":       alert_id,
             "icon":     icon,
-            "type":     "CRITICAL",
+            "type":     alert_type,
             "category": category,
             "title":    title,
             "desc":     desc,
