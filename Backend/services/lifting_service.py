@@ -315,6 +315,7 @@ INSERT DATA {{
             penalty_clause=confirmed.penalty_clause,
             quantity=confirmed.quantity,
             unit_cost=confirmed.unit_cost,
+            impacted_process=confirmed.impacted_process,
         )
 
         result = create_contract_graph(contract)

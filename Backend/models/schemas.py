@@ -67,6 +67,11 @@ class SLAContract(BaseModel):
         description="Unit cost of the material",
         examples=[12.50],
     )
+    impacted_process: str | None = Field(
+        default=None,
+        examples=["EV_Battery_Assembly_Line"],
+        description="Production process or assembly line impacted by this material",
+    )
 
 
 class ExtractedSLAData(BaseModel):
@@ -239,6 +244,11 @@ class ConfirmedSLA(BaseModel):
         ge=0.0,
         description="Unit cost of the material",
         examples=[12.50],
+    )
+    impacted_process: str | None = Field(
+        default=None,
+        examples=["EV_Battery_Assembly_Line"],
+        description="Production process or assembly line impacted by this material (human-verified)",
     )
 
 

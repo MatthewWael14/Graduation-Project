@@ -58,6 +58,7 @@ export default function SLAUpload({ user }) {
         corrections:    "",
         quantity:       result.mapped_sla?.quantity       || result.extracted_data?.quantity       || 100,
         unit_cost:      result.mapped_sla?.unit_cost      || result.extracted_data?.unit_cost      || 15.0,
+        impacted_process: result.mapped_sla?.impacted_process || "",
       });
       setStep("review");
     } catch (err) {
@@ -86,6 +87,7 @@ export default function SLAUpload({ user }) {
         corrections:    editedFields.corrections || null,
         quantity:       parseInt(editedFields.quantity, 10) || 0,
         unit_cost:      parseFloat(editedFields.unit_cost) || 0.0,
+        impacted_process: editedFields.impacted_process || null,
       });
       setConfirmed(result);
       setStep("done");
@@ -197,6 +199,24 @@ export default function SLAUpload({ user }) {
               <Field label="Penalty Clause"   field="penalty_clause" editedFields={editedFields} setEditedFields={setEditedFields} />
               <Field label="Quantity"         field="quantity"       type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
               <Field label="Unit Cost ($)"    field="unit_cost"      type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
+              
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                  Impacted Assembly Line
+                </label>
+                <select
+                  value={editedFields.impacted_process || ""}
+                  onChange={e => setEditedFields(p => ({ ...p, impacted_process: e.target.value }))}
+                  style={S.input}
+                >
+                  <option value="">-- Select Assembly Line --</option>
+                  <option value="EV_Battery_Assembly_Line">EV Battery Assembly Line</option>
+                  <option value="Electronics_SubAssembly_Line">Electronics SubAssembly Line</option>
+                  <option value="Main_Assembly_Line">Main Assembly Line</option>
+                  <option value="Chemical_Mixing_Phase">Chemical Mixing Phase</option>
+                  <option value="Coating_Process">Coating Process</option>
+                </select>
+              </div>
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>

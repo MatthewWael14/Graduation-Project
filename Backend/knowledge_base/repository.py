@@ -96,6 +96,21 @@ def create_contract_graph(contract: SLAContract) -> dict:
     safe_supplier_name = str(contract.supplier_name or "").replace('"', '\\"').replace("\n", " ")
     safe_material = str(contract.material or "").replace('"', '\\"').replace("\n", " ")
 
+    # optional impacted process triples
+    process_triple = ""
+    old_process_delete = ""
+    old_process_where = ""
+    if contract.impacted_process:
+        process_uri = _sanitize_uri_fragment(contract.impacted_process)
+        process_triple = f"\n            :{material_uri} :affectsProcess :{process_uri} ."
+        old_process_delete = f"\n            :{material_uri} :affectsProcess ?oldProcess ."
+        old_process_where = f"""
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{material_uri} :affectsProcess ?oldProcess .
+            }}
+        }}"""
+
     timestamp = datetime.utcnow().isoformat() + "Z"
 
     # ---- SPARQL UPDATE query ----
@@ -107,7 +122,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
     DELETE {{
         GRAPH <{CONTRACT_GRAPH}> {{
-            :{supplier_uri} :leadTimeDays ?oldLeadTime .
+            :{supplier_uri} :leadTimeDays ?oldLeadTime .{old_process_delete}
             :{supplier_uri} :penaltyClause ?oldPenalty .
             :{supplier_uri} :hasReliabilityScore ?oldScore .
             :{material_uri} :hasUnitCost ?oldUnitCost .
@@ -132,7 +147,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
             :{material_uri}  rdf:type       :RawMaterial ;
                              rdfs:label     "{safe_material}" ;
                              :hasUnitCost   "{contract.unit_cost}"^^xsd:float ;
-                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer .
+                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer .{process_triple}
 
             # ── Relationship: Supplier supplies RawMaterial ──
             :{supplier_uri}  :supplies      :{material_uri} .
@@ -179,7 +194,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{material_uri} :hasOrderedQuantity ?oldQty .
             }}
-        }}
+        }}{old_process_where}
         OPTIONAL {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{contract_uri} rdf:type :SLAContract ;
@@ -204,6 +219,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
         "graph": CONTRACT_GRAPH,
         "message": "Triples inserted successfully into GraphDB.",
     }
+
 
 
 def find_impacted_products_by_supplier_delay() -> list[dict]:
