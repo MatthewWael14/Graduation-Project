@@ -12,6 +12,7 @@ import time
 from knowledge_base.connection import graphdb
 from knowledge_base.repository import (
     PREFIXES,
+    CONTRACT_GRAPH,
     _sanitize_uri_fragment,
     find_impacted_products_by_supplier_delay,
 )
@@ -100,7 +101,11 @@ def get_risk_scores() -> list[dict]:
     for r in impacted:
         mat_name = r.get("materialLabel", "Unknown")
         sup_name = r.get("supplierLabel", "Unknown")
-        if (sup_name, mat_name) in seen_pairs:
+        
+        sup_key = _sanitize_uri_fragment(sup_name)
+        mat_key = _sanitize_uri_fragment(mat_name)
+        
+        if (sup_key, mat_key) in seen_pairs:
             continue
         risk_scores.append({
             "material":         mat_name,
@@ -119,17 +124,20 @@ def get_risk_scores() -> list[dict]:
             "threshold":        int(float(r.get("safetyStock"))) if r.get("safetyStock") is not None else 0,
             "requiredQty":      int(float(r.get("reqQty"))) if r.get("reqQty") is not None else 100,
         })
-        seen_pairs.add((sup_name, mat_name))
+        seen_pairs.add((sup_key, mat_key))
 
     # Then add the GREEN ones from all_rows, and enrich the RED ones if we found matching supplier data
     for row in all_rows:
         mat_name = row.get("materialName", "Unknown")
         sup_name = row.get("supplierName", "Unknown")
         
-        if (sup_name, mat_name) in seen_pairs:
-            # Enrich ONLY the matching supplier entry (match by both material AND supplier name)
+        sup_key = _sanitize_uri_fragment(sup_name)
+        mat_key = _sanitize_uri_fragment(mat_name)
+        
+        if (sup_key, mat_key) in seen_pairs:
+            # Enrich ONLY the matching supplier entry (match by normalized material AND supplier name)
             for rs in risk_scores:
-                if rs["material"] == mat_name and rs["supplierLabel"] == sup_name:
+                if _sanitize_uri_fragment(rs["material"]) == mat_key and _sanitize_uri_fragment(rs["supplierLabel"]) == sup_key:
                     if not rs["reliabilityScore"]:
                         rs["reliabilityScore"] = row.get("reliabilityScore")
                     if not rs["leadTime"]:
@@ -159,6 +167,7 @@ def get_risk_scores() -> list[dict]:
             "threshold":        int(float(row.get("safetyStock"))) if row.get("safetyStock") is not None else 0,
             "requiredQty":      0,
         })
+        seen_pairs.add((sup_key, mat_key))
     # Post-process status purely on stock vs safety-stock threshold.
     # An active delayed delivery does NOT independently force RED —
     # only genuine low inventory (stock < safetyStock) triggers AT RISK.
@@ -786,7 +795,7 @@ def get_alerts() -> list[dict]:
     """
     query = f"""
     {PREFIXES}
-    SELECT ?alertId ?title ?desc ?intendedFor ?status ?severity
+    SELECT ?alertId ?title ?desc ?intendedFor ?status ?severity ?category ?materialName ?supplierName
     WHERE {{
         ?alert rdf:type :SystemAlert ;
                :hasTitle ?title ;
@@ -794,6 +803,9 @@ def get_alerts() -> list[dict]:
                :intendedFor ?intendedFor ;
                :hasStatus ?status .
         OPTIONAL {{ ?alert :hasSeverity ?severity . }}
+        OPTIONAL {{ ?alert :hasCategory ?category . }}
+        OPTIONAL {{ ?alert :hasMaterialName ?materialName . }}
+        OPTIONAL {{ ?alert :hasSupplierName ?supplierName . }}
         BIND(REPLACE(STR(?alert), "^.*#", "") AS ?alertId)
     }}
     ORDER BY DESC(?alertId)
@@ -808,6 +820,9 @@ def get_alerts() -> list[dict]:
         status = r.get("status")
         intended_for = r.get("intendedFor", "")
         severity = r.get("severity", "LOW")
+        alert_category = r.get("category", "")
+        material_name = r.get("materialName", "")
+        supplier_name = r.get("supplierName", "")
 
         if status == "DISMISSED":
             continue
@@ -821,8 +836,8 @@ def get_alerts() -> list[dict]:
         if "Procurement" in intended_for:
             roles.append("procurement")
 
-        icon = "🚨" if "Production" in intended_for else "🚚" if "Logistics" in intended_for else "📝"
-        category = "Inventory" if "Production" in intended_for else "SLA Breach"
+        icon = "🏭" if alert_category == "New Material" else "🚨" if "Production" in intended_for else "🚚" if "Logistics" in intended_for else "📝"
+        category = alert_category if alert_category else ("Inventory" if "Production" in intended_for else "SLA Breach")
 
         # Map BNode / GraphDB severity values to frontend alert types (CRITICAL, HIGH, INFO, LOW)
         alert_type = str(severity).upper()
@@ -833,18 +848,20 @@ def get_alerts() -> list[dict]:
                 alert_type = "LOW"
 
         alerts.append({
-            "id":       alert_id,
-            "icon":     icon,
-            "type":     alert_type,
-            "category": category,
-            "title":    title,
-            "desc":     desc,
-            "time":     "Live ML Alert",
-            "date":     "Knowledge Graph",
-            "unread":   (status == "UNREAD"),
-            "from":     "Risk Engine",
-            "fromRole": "AI",
-            "roles":    roles,
+            "id":           alert_id,
+            "icon":         icon,
+            "type":         alert_type,
+            "category":     category,
+            "title":        title,
+            "desc":         desc,
+            "time":         "Live ML Alert",
+            "date":         "Knowledge Graph",
+            "unread":       (status == "UNREAD"),
+            "from":         "Risk Engine",
+            "fromRole":     "AI",
+            "roles":        roles,
+            "materialName": material_name,
+            "supplierName": supplier_name,
         })
         
     return alerts
@@ -932,4 +949,117 @@ def run_semantic_enrichment() -> None:
 
 
 
+def get_assembly_lines() -> list[str]:
+    """Return all distinct production process labels from the Knowledge Graph."""
+    q = f"""
+    {PREFIXES}
+    SELECT DISTINCT ?processLabel
+    WHERE {{
+        ?process rdf:type :ProductionProcess .
+        OPTIONAL {{ ?process rdfs:label ?pLabel . }}
+        BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processLabel)
+    }}
+    ORDER BY ?processLabel
+    """
+    rows = graphdb.execute_sparql_select(q)
+    return [r["processLabel"] for r in rows if r.get("processLabel")]
 
+
+def get_assembly_line_for_material(material_name: str):
+    """
+    Check if a material already has an affectsProcess link in the Knowledge Graph.
+    Returns the process label string if found, else None.
+    """
+    safe_mat = material_name.replace('"', '\\"')
+    q = f"""
+    {PREFIXES}
+    SELECT ?processLabel
+    WHERE {{
+        ?material rdf:type :RawMaterial .
+        OPTIONAL {{ ?material rdfs:label ?mLabel . }}
+        BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
+        FILTER(LCASE(STR(?materialName)) = LCASE("{safe_mat}"))
+        ?material :affectsProcess ?process .
+        OPTIONAL {{ ?process rdfs:label ?pLabel . }}
+        BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processLabel)
+    }}
+    LIMIT 1
+    """
+    rows = graphdb.execute_sparql_select(q)
+    if rows and rows[0].get("processLabel"):
+        return rows[0]["processLabel"]
+    return None
+
+
+def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
+    """
+    Insert a SystemAlert into the Knowledge Graph notifying the Production Manager
+    of a new material that needs an assembly line assignment.
+    Returns the alert_id created.
+    """
+    import hashlib, time as _time
+    alert_id = "NEWMAT_" + hashlib.md5(f"{material_name}{supplier_name}{_time.time()}".encode()).hexdigest()[:8].upper()
+    safe_mat = material_name.replace('"', '\\"')
+    safe_sup = supplier_name.replace('"', '\\"')
+    title = "New Material Requires Assembly Line Assignment"
+    desc = f"Material '{safe_mat}' from supplier '{safe_sup}' has been added via SLA upload but has no linked assembly line. Please assign it to an existing production process."
+    q = f"""
+    {PREFIXES}
+    INSERT DATA {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            :{alert_id} rdf:type :SystemAlert ;
+                        :hasTitle "{title}" ;
+                        :hasDesc "{desc}" ;
+                        :intendedFor "Production Manager" ;
+                        :hasStatus "UNREAD" ;
+                        :hasSeverity "HIGH" ;
+                        :hasCategory "New Material" ;
+                        :hasMaterialName "{safe_mat}" ;
+                        :hasSupplierName "{safe_sup}" .
+        }}
+    }}
+    """
+    graphdb.execute_sparql_update(q)
+    return alert_id
+
+
+def assign_material_to_process(material_name: str, process_name: str) -> dict:
+    """
+    Create an :affectsProcess link between a material and an existing production process.
+    """
+    safe_mat = material_name.replace('"', '\\"')
+    safe_proc = process_name.replace('"', '\\"')
+    mat_uri = _sanitize_uri_fragment(material_name)
+    proc_uri = _sanitize_uri_fragment(process_name)
+
+    lookup_q = f"""
+    {PREFIXES}
+    SELECT ?mat ?proc WHERE {{
+        OPTIONAL {{
+            ?mat rdf:type :RawMaterial .
+            OPTIONAL {{ ?mat rdfs:label ?ml . }}
+            FILTER(STR(?ml) = "{safe_mat}" || REPLACE(STR(?mat), "^.*#", "") = "{mat_uri}")
+        }}
+        OPTIONAL {{
+            ?proc rdf:type :ProductionProcess .
+            OPTIONAL {{ ?proc rdfs:label ?pl . }}
+            FILTER(STR(?pl) = "{safe_proc}" || REPLACE(STR(?proc), "^.*#", "") = "{proc_uri}")
+        }}
+    }}
+    LIMIT 1
+    """
+    rows = graphdb.execute_sparql_select(lookup_q)
+    mat_ref = f"<{rows[0]['mat']}>" if rows and rows[0].get("mat") else f":{mat_uri}"
+    proc_ref = f"<{rows[0]['proc']}>" if rows and rows[0].get("proc") else f":{proc_uri}"
+
+    insert_q = f"""
+    {PREFIXES}
+    INSERT DATA {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            {mat_ref} :affectsProcess {proc_ref} .
+        }}
+    }}
+    """
+    graphdb.execute_sparql_update(insert_q)
+    invalidate_impacted_cache()
+    return {"status": "success", "material": material_name, "process": process_name}

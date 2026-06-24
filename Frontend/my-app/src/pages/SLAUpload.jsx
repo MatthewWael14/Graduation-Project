@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { C, S } from "../styles/theme";
-import { uploadSLAPdf, confirmSLA } from "../services/api";
+import { uploadSLAPdf, confirmSLA, matchAssemblyLine } from "../services/api";
 
 // ── Field must be defined OUTSIDE the parent component so React
 // does not remount it on every keystroke (which caused typing to break)
@@ -30,6 +30,7 @@ export default function SLAUpload({ user }) {
   const [error,        setError]        = useState("");
   const [formErrors,   setFormErrors]   = useState({});
   const [pipelineStep, setPipelineStep] = useState(0);
+  const [assemblyMatch, setAssemblyMatch] = useState(null); // { matched, process } | null
 
   const pipelineSteps = [
     "📤 File uploaded to staging",
@@ -52,16 +53,24 @@ export default function SLAUpload({ user }) {
       clearInterval(stepTimer);
       setPipelineStep(3);
       setExtraction(result);
+      const materialName = result.mapped_sla?.material || result.extracted_data?.material || "";
       setEditedFields({
         supplier_name:  result.mapped_sla?.supplier_name  || result.extracted_data?.supplier_name || "",
-        material:       result.mapped_sla?.material       || result.extracted_data?.material       || "",
+        material:       materialName,
         lead_time_days: result.mapped_sla?.lead_time_days || Math.ceil((result.extracted_data?.sla_lead_time_hours || 0) / 24) || "",
         penalty_clause: result.mapped_sla?.penalty_clause || `$${result.extracted_data?.delay_penalty_rate || 0}/day` || "",
         corrections:    "",
         quantity:       result.mapped_sla?.quantity       || result.extracted_data?.quantity       || "",
         unit_cost:      result.mapped_sla?.unit_cost      || result.extracted_data?.unit_cost      || "",
-        impacted_process: result.mapped_sla?.impacted_process || "",
       });
+      // Auto-match the assembly line
+      if (materialName) {
+        matchAssemblyLine(materialName)
+          .then(match => setAssemblyMatch(match))
+          .catch(() => setAssemblyMatch({ matched: false, process: null }));
+      } else {
+        setAssemblyMatch({ matched: false, process: null });
+      }
       setStep("review");
     } catch (err) {
       clearInterval(stepTimer);
@@ -86,7 +95,7 @@ export default function SLAUpload({ user }) {
     if (!editedFields.penalty_clause) newErrors.penalty_clause = "Penalty Clause is required";
     if (!editedFields.quantity) newErrors.quantity = "Quantity is required";
     if (!editedFields.unit_cost) newErrors.unit_cost = "Unit Cost is required";
-    if (!editedFields.impacted_process) newErrors.impacted_process = "Impacted Process is required";
+    // No impacted_process validation — auto-matched or handled via alert
 
     if (Object.keys(newErrors).length > 0) {
       setFormErrors(newErrors);
@@ -97,15 +106,15 @@ export default function SLAUpload({ user }) {
     setStep("confirming");
     try {
       const result = await confirmSLA({
-        extraction_id:  extraction.extraction_id,
-        supplier_name:  editedFields.supplier_name,
-        material:       editedFields.material,
-        lead_time_days: parseInt(editedFields.lead_time_days, 10) || 0,
-        penalty_clause: editedFields.penalty_clause,
-        corrections:    editedFields.corrections || null,
-        quantity:       parseInt(editedFields.quantity, 10) || 0,
-        unit_cost:      parseFloat(editedFields.unit_cost) || 0.0,
-        impacted_process: editedFields.impacted_process || null,
+        extraction_id:    extraction.extraction_id,
+        supplier_name:    editedFields.supplier_name,
+        material:         editedFields.material,
+        lead_time_days:   parseInt(editedFields.lead_time_days, 10) || 0,
+        penalty_clause:   editedFields.penalty_clause,
+        corrections:      editedFields.corrections || null,
+        quantity:         parseInt(editedFields.quantity, 10) || 0,
+        unit_cost:        parseFloat(editedFields.unit_cost) || 0.0,
+        impacted_process: assemblyMatch?.matched ? assemblyMatch.process : null,
       });
       setConfirmed(result);
       setStep("done");
@@ -117,7 +126,7 @@ export default function SLAUpload({ user }) {
 
   const reset = () => {
     setStep("idle"); setExtraction(null); setConfirmed(null);
-    setError(""); setEditedFields({}); setPipelineStep(0);
+    setError(""); setEditedFields({}); setPipelineStep(0); setAssemblyMatch(null);
   };
 
   return (
@@ -218,24 +227,30 @@ export default function SLAUpload({ user }) {
               <Field label="Quantity"         field="quantity"       type="number" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.quantity} />
               <Field label="Unit Cost ($)"    field="unit_cost"      type="number" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.unit_cost} />
               
+              {/* Assembly Line: auto-matched or new-material notice */}
               <div style={{ marginBottom: 12 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                  Impacted Assembly Line
+                  Assembly Line
                 </label>
-                <select
-                  value={editedFields.impacted_process || ""}
-                  onChange={e => setEditedFields(p => ({ ...p, impacted_process: e.target.value }))}
-                  style={{ ...S.input, borderColor: formErrors.impacted_process ? C.red : C.border, background: formErrors.impacted_process ? C.red + "0A" : C.bg }}
-                >
-                  <option value="" style={{ background: C.bg, color: C.text }}>-- Select Assembly Line --</option>
-                  <option value="EV_Battery_Assembly_Line" style={{ background: C.bg, color: C.text }}>EV Battery Assembly Line</option>
-                  <option value="Electronics_SubAssembly_Line" style={{ background: C.bg, color: C.text }}>Electronics SubAssembly Line</option>
-                  <option value="Main_Assembly_Line" style={{ background: C.bg, color: C.text }}>Main Assembly Line</option>
-                  <option value="Chemical_Mixing_Phase" style={{ background: C.bg, color: C.text }}>Chemical Mixing Phase</option>
-                  <option value="Coating_Process" style={{ background: C.bg, color: C.text }}>Coating Process</option>
-                </select>
-                {formErrors.impacted_process && <div style={{ color: C.red, fontSize: 11, marginTop: 4, fontWeight: 500 }}>{formErrors.impacted_process}</div>}
+                {assemblyMatch === null && (
+                  <div style={{ fontSize: 12, color: C.muted, padding: "8px 12px", background: C.bg, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                    ⏳ Checking knowledge graph...
+                  </div>
+                )}
+                {assemblyMatch?.matched && (
+                  <div style={{ fontSize: 13, color: C.green, padding: "10px 14px", background: C.green + "15", borderRadius: 8, border: `1px solid ${C.green}44`, fontWeight: 600 }}>
+                    ✅ Auto-matched: <span style={{ color: C.text }}>{assemblyMatch.process.replace(/_/g, " ")}</span>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginTop: 2 }}>This material is already linked to an assembly line in the system.</div>
+                  </div>
+                )}
+                {assemblyMatch !== null && !assemblyMatch.matched && (
+                  <div style={{ fontSize: 13, color: C.orange, padding: "10px 14px", background: C.orange + "15", borderRadius: 8, border: `1px solid ${C.orange}44`, fontWeight: 600 }}>
+                    ⚠ New material detected
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginTop: 2 }}>An alert will be sent to the Production Manager to manually assign this material to an assembly line.</div>
+                  </div>
+                )}
               </div>
+
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>

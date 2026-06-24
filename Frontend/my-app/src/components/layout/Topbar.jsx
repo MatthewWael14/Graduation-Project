@@ -11,7 +11,7 @@ function useOutsideClick(ref, handler) {
   }, [ref, handler]);
 }
 
-export default function Topbar({ activePage, onNavigate, user, onLogout, onRefresh }) {
+export default function Topbar({ activePage, onNavigate, user, onLogout, onRefresh, notifVersion, onAlertsChanged }) {
   const [notifOpen,     setNotifOpen]     = useState(false);
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -43,7 +43,7 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
     loadTopbarData(); 
     const intervalId = setInterval(loadTopbarData, 5000);
     return () => clearInterval(intervalId);
-  }, [user]);
+  }, [user, notifVersion]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -144,7 +144,15 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
                   Notifications {unread > 0 && <span style={{ ...S.badge(C.red), marginLeft: 6, fontSize: 10 }}>{unread} new</span>}
                 </span>
                 {unread > 0 && (
-                  <button onClick={() => setNotifications(p => p.map(n => ({ ...n, unread: false })))}
+                  <button onClick={async () => {
+                    const unreadIds = notifications.filter(a => a.unread).map(a => a.id);
+                    setNotifications(p => p.map(n => ({ ...n, unread: false })));
+                    if (onAlertsChanged) onAlertsChanged();
+                    try {
+                      const { markAlertRead } = await import("../../services/api");
+                      await Promise.all(unreadIds.map(id => markAlertRead(id)));
+                    } catch (e) { console.error("Failed to mark read:", e); }
+                  }}
                     style={{ background: "none", border: "none", color: C.accent, fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>
                     Mark all read
                   </button>
@@ -158,17 +166,18 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
                     <div key={n.id}
                       onClick={() => {
                         setNotifications(p => p.map(x => x.id === n.id ? { ...x, unread: false } : x));
+                        if (n.unread && onAlertsChanged) onAlertsChanged();
                         setNotifOpen(false);
                         onNavigate("alerts", { alertId: n.id });
                       }}
-                      style={{ padding: "10px 14px", cursor: "pointer", background: n.unread ? "rgba(245,158,11,0.04)" : "transparent", borderBottom: `1px solid ${C.border}22`, display: "flex", gap: 10 }}>
+                      style={{ padding: "10px 14px", cursor: "pointer", background: n.unread ? C.blue + "11" : "transparent", borderBottom: `1px solid ${C.border}22`, display: "flex", gap: 10 }}>
                       <span style={{ fontSize: 13 }}>{n.icon || "🔔"}</span>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                           <span style={{ fontSize: 11, fontWeight: n.unread ? 700 : 400, color: C.text }}>{n.title}</span>
-                          {n.unread && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.accent, marginTop: 4 }} />}
+                          {n.unread && <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.blue, marginTop: 4, boxShadow: `0 0 4px ${C.blue}` }} />}
                         </div>
-                        <div style={{ fontSize: 10, color: C.muted, marginTop: 2, lineHeight: 1.4 }}>{(n.desc || "").slice(0, 70)}...</div>
+                        <div style={{ fontSize: 10, color: n.unread ? C.text : C.muted, marginTop: 2, lineHeight: 1.4 }}>{(n.desc || "").slice(0, 70)}...</div>
                         <div style={{ fontSize: 9, color: C.muted, marginTop: 3 }}>{n.time || n.date}</div>
                       </div>
                     </div>

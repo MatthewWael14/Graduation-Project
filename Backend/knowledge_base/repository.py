@@ -43,6 +43,8 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 CONTRACT_GRAPH = "http://example.org/contracts/"
 
 
+import re
+
 def _sanitize_uri_fragment(name: str) -> str:
     """
     Convert a human-readable name into a safe URI fragment.
@@ -51,10 +53,11 @@ def _sanitize_uri_fragment(name: str) -> str:
     --------
     >>> _sanitize_uri_fragment("Stark Industries")
     'Stark_Industries'
-    >>> _sanitize_uri_fragment("Cold-Rolled Steel")
-    'Cold-Rolled_Steel'
+    >>> _sanitize_uri_fragment("Cold-Rolled Steel 1.0")
+    'Cold-Rolled_Steel_10'
     """
-    return name.strip().replace(" ", "_")
+    name = name.strip().replace(" ", "_")
+    return re.sub(r'[^a-zA-Z0-9_-]', '', name)
 
 
 def create_contract_graph(contract: SLAContract) -> dict:

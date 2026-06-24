@@ -314,6 +314,14 @@ INSERT DATA {{
             - ``extraction_id``: link back to the LLM extraction
             - ``triples_inserted``: always 1 (one batch insert)
         """
+        from services.dashboard_service import get_assembly_line_for_material, fire_new_material_alert
+
+        # --- Auto-match or alert for assembly line ---
+        resolved_process = confirmed.impacted_process  # may be None if not provided
+        if not resolved_process:
+            resolved_process = get_assembly_line_for_material(confirmed.material)
+        is_new_material = resolved_process is None
+
         contract = SLAContract(
             supplier_name=confirmed.supplier_name,
             material=confirmed.material,
@@ -321,7 +329,7 @@ INSERT DATA {{
             penalty_clause=confirmed.penalty_clause,
             quantity=confirmed.quantity,
             unit_cost=confirmed.unit_cost,
-            impacted_process=confirmed.impacted_process,
+            impacted_process=resolved_process,  # None if brand-new material
         )
 
         result = create_contract_graph(contract)
@@ -329,6 +337,14 @@ INSERT DATA {{
         result["status"] = "success"
         result["extraction_id"] = confirmed.extraction_id
         result["triples_inserted"] = 1
+        result["auto_matched_process"] = resolved_process
+        result["is_new_material"] = is_new_material
+
+        # If brand-new material, fire a Production Manager alert
+        if is_new_material:
+            alert_id = fire_new_material_alert(confirmed.material, confirmed.supplier_name)
+            result["new_material_alert_id"] = alert_id
+            logger.info("New material alert fired: %s for material '%s'", alert_id, confirmed.material)
 
         if confirmed.corrections:
             result["reviewer_notes"] = confirmed.corrections

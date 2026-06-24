@@ -137,6 +137,25 @@ export async function confirmSLA(confirmedData) {
   });
 }
 
+// GET /api/sandbox/match-assembly-line?material=<name>
+export async function matchAssemblyLine(material) {
+  return safeFetch(`${BASE}/api/sandbox/match-assembly-line?material=${encodeURIComponent(material)}`);
+}
+
+// GET /api/dashboard/assembly-lines
+export async function fetchAssemblyLines() {
+  return safeFetch(`${BASE}/api/dashboard/assembly-lines`);
+}
+
+// POST /api/dashboard/assign-material-process
+export async function assignMaterialToProcess(material, process, alertId = null) {
+  return safeFetch(`${BASE}/api/dashboard/assign-material-process`, {
+    method: "POST",
+    body: JSON.stringify({ material, process, alert_id: alertId }),
+  });
+}
+
+
 // POST /api/sandbox/upload-transactions
 export async function uploadTransactions(file) {
   const form = new FormData();

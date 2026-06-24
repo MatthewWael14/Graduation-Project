@@ -24,7 +24,7 @@ except ImportError:
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from models.schemas import ConfirmedSLA, IoTTelemetryEvent, ManagerAlert, SLAContract, OrderRiskPredictionRequest, OrderRiskPredictionResponse
-from services.dashboard_service import get_impacted_products, invalidate_impacted_cache
+from services.dashboard_service import get_impacted_products, invalidate_impacted_cache, get_assembly_line_for_material
 from services.lifting_service import persist_confirmed_sla, save_sla_contract, to_sla_contract
 from services.llm_service import run_extraction_pipeline
 from services.risk_engine_service import process_iot_event
@@ -37,6 +37,22 @@ router = APIRouter(
     prefix="/api/sandbox",
     tags=["SLA Sandbox"],
 )
+
+
+@router.get("/match-assembly-line")
+async def match_assembly_line(material: str):
+    """
+    Check if a material already exists in the Knowledge Graph with a linked assembly line.
+    Returns { matched: true, process: 'ProcessName' } or { matched: false }.
+    """
+    try:
+        process = get_assembly_line_for_material(material)
+        if process:
+            return {"matched": True, "process": process}
+        return {"matched": False, "process": None}
+    except Exception as exc:
+        logger.error("match-assembly-line error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 def _extract_text_from_pdf(file_bytes: bytes) -> str:

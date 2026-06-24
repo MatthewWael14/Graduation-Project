@@ -16,6 +16,10 @@ from services.dashboard_service import (
     get_kpis,
     get_alerts,
     assign_fallback_supplier,
+    get_assembly_lines,
+    get_assembly_line_for_material,
+    assign_material_to_process,
+    update_alert_status,
 )
 from services.chat_service import run_chat_pipeline_async
 from pydantic import BaseModel
@@ -109,6 +113,36 @@ async def handle_alerts():
         raise HTTPException(status_code=500, detail=str(exc))
 
 from services.dashboard_service import update_alert_status
+
+@router.get("/assembly-lines")
+async def handle_assembly_lines():
+    """Return all existing production process/assembly line names from the Knowledge Graph."""
+    try:
+        lines = get_assembly_lines()
+        return {"status": "success", "assembly_lines": lines}
+    except Exception as exc:
+        logger.error("Failed to fetch assembly lines: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class AssignMaterialRequest(BaseModel):
+    material: str
+    process: str
+    alert_id: str | None = None
+
+
+@router.post("/assign-material-process")
+async def handle_assign_material_process(req: AssignMaterialRequest):
+    """Assign a material to an assembly line and optionally mark the alert as read."""
+    try:
+        result = assign_material_to_process(req.material, req.process)
+        if req.alert_id:
+            update_alert_status(req.alert_id, "DISMISSED")
+        return result
+    except Exception as exc:
+        logger.error("Failed to assign material to process: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @router.post("/alerts/mark-read")
 async def mark_alert_read(req: AlertStatusUpdate):

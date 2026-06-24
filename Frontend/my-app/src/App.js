@@ -17,6 +17,7 @@ export default function App() {
   const [refreshKey,    setRefreshKey]    = useState(0);
   const [aiPrompt,      setAiPrompt]      = useState("");
   const [initialAlertId, setInitialAlertId] = useState(null);
+  const [notifVersion,  setNotifVersion]  = useState(0); // bumped when alerts are marked read
 
   const handleLogin    = (u) => { setUser(u); setActivePage(ROLE_HOME[u.role] || "dashboard"); };
   const handleLogout   = ()  => { setUser(null); setActivePage("dashboard"); };
@@ -33,7 +34,8 @@ export default function App() {
       }
     }
   };
-  const handleRefresh  = () => setRefreshKey(k => k + 1);
+  const handleRefresh     = () => setRefreshKey(k => k + 1);
+  const bumpNotifVersion  = () => setNotifVersion(v => v + 1);
 
   if (!user) return <Login onLogin={handleLogin} />;
 
@@ -47,13 +49,13 @@ export default function App() {
       case "suppliers":  return <Suppliers      {...props} />;
       case "violations": return <SLAViolations  {...props} />;
       case "ai":         return <ChatAssistant  {...props} initialPrompt={aiPrompt} clearInitialPrompt={() => setAiPrompt("")} />;
-      case "alerts":     return <Alerts         {...props} initialAlertId={initialAlertId} clearInitialAlertId={() => setInitialAlertId(null)} />;
+      case "alerts":     return <Alerts         {...props} initialAlertId={initialAlertId} clearInitialAlertId={() => setInitialAlertId(null)} onAlertsChanged={bumpNotifVersion} />;
       default:           return <Dashboard      {...props} />;
     }
   };
 
   return (
-    <Layout activePage={activePage} onNavigate={handleNavigate} user={user} onLogout={handleLogout} onRefresh={handleRefresh} refreshKey={refreshKey}>
+    <Layout activePage={activePage} onNavigate={handleNavigate} user={user} onLogout={handleLogout} onRefresh={handleRefresh} refreshKey={refreshKey} notifVersion={notifVersion} onAlertsChanged={bumpNotifVersion}>
       {renderPage()}
     </Layout>
   );

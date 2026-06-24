@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
-import { fetchAlerts, markAlertRead, dismissAlert } from "../services/api";
+import { fetchAlerts, markAlertRead, dismissAlert, fetchAssemblyLines, assignMaterialToProcess } from "../services/api";
 
 const TYPE_COLOR = {
   CRITICAL: C.red,
@@ -19,9 +19,39 @@ const TYPE_ICON = {
 };
 
 // ── Detail Modal ─────────────────────────────────────────────────────────────
-function AlertDetailModal({ alert: a, onClose, onDismiss }) {
+function AlertDetailModal({ alert: a, onClose, onDismiss, onAssigned }) {
+  const typeColor = a ? (TYPE_COLOR[a.type] || C.muted) : C.muted;
+  const isNewMaterial = a ? a.category === "New Material" : false;
+
+  const [assemblyLines, setAssemblyLines]       = useState([]);
+  const [selectedProcess, setSelectedProcess]   = useState("");
+  const [assigning, setAssigning]               = useState(false);
+  const [assignSuccess, setAssignSuccess]       = useState(false);
+  const [assignError, setAssignError]           = useState("");
+
+  useEffect(() => {
+    if (isNewMaterial) {
+      fetchAssemblyLines()
+        .then(data => setAssemblyLines(data?.assembly_lines || []))
+        .catch(() => {});
+    }
+  }, [isNewMaterial]);
+
+  const handleAssign = async () => {
+    if (!selectedProcess) return;
+    setAssigning(true); setAssignError("");
+    try {
+      await assignMaterialToProcess(a.materialName || a.desc, selectedProcess, a.id);
+      setAssignSuccess(true);
+      if (onAssigned) onAssigned(a.id);
+    } catch (err) {
+      setAssignError("Failed to assign. Please try again.");
+    } finally {
+      setAssigning(false);
+    }
+  };
+
   if (!a) return null;
-  const typeColor = TYPE_COLOR[a.type] || C.muted;
 
   return (
     <div
@@ -105,6 +135,38 @@ function AlertDetailModal({ alert: a, onClose, onDismiss }) {
             ))}
           </div>
 
+          {/* ── New Material: Assembly Line Assignment ── */}
+          {isNewMaterial && (
+            <div style={{ background: C.orange + "10", border: `1px solid ${C.orange}44`, borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.orange, marginBottom: 10 }}>🏭 Assign Assembly Line</div>
+              {assignSuccess ? (
+                <div style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>✅ Successfully assigned! The material is now linked to the selected assembly line.</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Select which assembly line this material belongs to:</div>
+                  <select
+                    value={selectedProcess}
+                    onChange={e => setSelectedProcess(e.target.value)}
+                    style={{ ...S.input, width: "100%", marginBottom: 10, background: C.bg, color: C.text }}
+                  >
+                    <option value="">-- Select Assembly Line --</option>
+                    {assemblyLines.map(line => (
+                      <option key={line} value={line}>{line.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                  {assignError && <div style={{ color: C.red, fontSize: 12, marginBottom: 8 }}>{assignError}</div>}
+                  <button
+                    onClick={handleAssign}
+                    disabled={!selectedProcess || assigning}
+                    style={{ ...S.btn(), fontSize: 13, opacity: (!selectedProcess || assigning) ? 0.6 : 1, width: "100%" }}
+                  >
+                    {assigning ? "⚙ Assigning..." : "✓ Assign Assembly Line"}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Escalation notice */}
           {a.type === "ESCALATION" && (
             <div style={{
@@ -139,7 +201,7 @@ function AlertDetailModal({ alert: a, onClose, onDismiss }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function Alerts({ user, initialAlertId, clearInitialAlertId }) {
+export default function Alerts({ user, initialAlertId, clearInitialAlertId, onAlertsChanged }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
@@ -183,12 +245,15 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId }) {
 
   const markRead = async (id) => {
     setAlerts(p => p.map(a => a.id === id ? { ...a, unread: false } : a));
+    if (onAlertsChanged) onAlertsChanged();
     try { await markAlertRead(id); } catch (e) { console.error("Failed to mark read:", e); }
   };
 
   const markAllRead = async () => {
     const unreadIds = alerts.filter(a => a.unread).map(a => a.id);
+    if (unreadIds.length === 0) return;
     setAlerts(p => p.map(a => ({ ...a, unread: false })));
+    if (onAlertsChanged) onAlertsChanged();
     try {
       await Promise.all(unreadIds.map(id => markAlertRead(id)));
     } catch (e) {
@@ -225,6 +290,10 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId }) {
         alert={detailAlert}
         onClose={() => setDetailAlert(null)}
         onDismiss={dismiss}
+        onAssigned={(id) => {
+          dismiss(id);
+          setDetailAlert(null);
+        }}
       />
 
       <div style={{ ...S.pageHeader, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -342,7 +411,7 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId }) {
           const typeColor = TYPE_COLOR[a.type] || C.muted;
           const isExpanded = expanded === a.id;
           return (
-            <div key={a.id} style={{ ...S.card, borderLeft: `4px solid ${typeColor}`, padding: 0, overflow: "hidden", opacity: a.unread ? 1 : 0.75, transition: "all 0.15s" }}>
+            <div key={a.id} style={{ ...S.card, borderLeft: `4px solid ${typeColor}`, padding: 0, overflow: "hidden", background: a.unread ? C.blue + "0A" : C.surface, transition: "all 0.15s" }}>
               <div
                 style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px", cursor: "pointer" }}
                 onClick={() => { setExpanded(isExpanded ? null : a.id); markRead(a.id); }}
