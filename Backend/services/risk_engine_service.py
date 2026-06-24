@@ -655,9 +655,11 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
         from knowledge_base.repository import _sanitize_uri_fragment
         import hashlib
         import time
+        from datetime import datetime
 
         delivery_uri = _sanitize_uri_fragment(event.delivery_id)
 
+        created_at = datetime.utcnow().isoformat() + "Z"
         # Save a separate SystemAlert for each targeted manager
         triples = []
         for m_title, m_text in state["alerts"].items():
@@ -681,7 +683,8 @@ def alert_finalizer_node(state: RiskEngineState) -> RiskEngineState:
                             :intendedFor "{safe_title}"^^xsd:string ;
                             :hasStatus "UNREAD"^^xsd:string ;
                             :hasSeverity "{safe_severity}"^^xsd:string ;
-                            :triggeredBy :{delivery_uri} .
+                            :triggeredBy :{delivery_uri} ;
+                            :createdAt "{created_at}"^^xsd:dateTime .
             """)
 
         if triples:

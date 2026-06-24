@@ -130,9 +130,11 @@ export default function InventoryRisk({ onNavigate }) {
         <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${C.blue}` }}>
           <div style={{ ...S.cardTitle, marginBottom: 12 }}>🔍 Detail — {products[selected].materialLabel || products[selected].material}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button style={S.btn()} onClick={() => onNavigate("suppliers")}>🔄 Find Fallback Supplier</button>
-            </div>
+            {products[selected].status === "RED" && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={S.btn()} onClick={() => onNavigate("suppliers")}>🔄 Find Fallback Supplier</button>
+              </div>
+            )}
             
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 8 }}>🤖 Ask AI Assistant:</div>

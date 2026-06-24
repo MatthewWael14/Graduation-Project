@@ -11,6 +11,35 @@ function useOutsideClick(ref, handler) {
   }, [ref, handler]);
 }
 
+const formatTimestamp = (ts) => {
+  if (!ts) return "";
+  let value = ts;
+  if (typeof value === "string" && !/[+-]\\d{2}:?\\d{2}$|Z$/.test(value)) {
+    value = value.replace(" ", "T") + "Z";
+  }
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return ts;
+  const adjusted = new Date(dt.getTime() + 60 * 60 * 1000);
+  const year = adjusted.getUTCFullYear();
+  const month = String(adjusted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(adjusted.getUTCDate()).padStart(2, "0");
+  const hour = String(adjusted.getUTCHours());
+  const minute = String(adjusted.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+};
+
+const normalizeNotification = (notification) => {
+  const rawTs = notification.createdAt || notification.date || notification.time;
+  const formatted = formatTimestamp(rawTs);
+  return {
+    ...notification,
+    createdAt: rawTs,
+    timestamp: formatted || notification.time || notification.date || "",
+    time: formatted || notification.time || "",
+    date: formatted || notification.date || "",
+  };
+};
+
 export default function Topbar({ activePage, onNavigate, user, onLogout, onRefresh, notifVersion, onAlertsChanged }) {
   const [notifOpen,     setNotifOpen]     = useState(false);
   const [profileOpen,   setProfileOpen]   = useState(false);
@@ -31,9 +60,17 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
 
     fetchAlerts().then(data => {
       if (Array.isArray(data)) {
-        let filteredData = data.filter(a => !user || user.role === "admin" || !a.roles || a.roles.includes(user.role));
-        // Sort so UNREAD are at the top
-        filteredData.sort((a, b) => (a.unread === b.unread ? 0 : a.unread ? -1 : 1));
+        let filteredData = data
+          .filter(a => !user || user.role === "admin" || !a.roles || a.roles.includes(user.role))
+          .map(normalizeNotification);
+        // Sort by recency (newest first). If timestamps tie, prefer unread items.
+        filteredData.sort((a, b) => {
+          const ta = new Date(a.createdAt || a.date || a.time || 0).getTime();
+          const tb = new Date(b.createdAt || b.date || b.time || 0).getTime();
+          if (tb !== ta) return tb - ta;
+          if (a.unread === b.unread) return 0;
+          return a.unread ? -1 : 1;
+        });
         setNotifications(filteredData);
       }
     }).catch(console.error);
@@ -178,7 +215,7 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
                           {n.unread && <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.blue, marginTop: 4, boxShadow: `0 0 4px ${C.blue}` }} />}
                         </div>
                         <div style={{ fontSize: 10, color: n.unread ? C.text : C.muted, marginTop: 2, lineHeight: 1.4 }}>{(n.desc || "").slice(0, 70)}...</div>
-                        <div style={{ fontSize: 9, color: C.muted, marginTop: 3 }}>{n.time || n.date}</div>
+                        <div style={{ fontSize: 9, color: C.muted, marginTop: 3 }}>{n.timestamp || n.time || n.date}</div>
                       </div>
                     </div>
                   ))

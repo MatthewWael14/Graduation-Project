@@ -213,15 +213,46 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId, onAl
   useEffect(() => {
     let cancelled = false;
 
+    const formatTimestamp = (ts) => {
+      if (!ts) return "";
+      let value = ts;
+      if (typeof value === "string" && !/[+-]\\d{2}:?\\d{2}$|Z$/.test(value)) {
+        value = value.replace(" ", "T") + "Z";
+      }
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return ts;
+      const adjusted = new Date(dt.getTime() + 60 * 60 * 1000);
+      const year = adjusted.getUTCFullYear();
+      const month = String(adjusted.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(adjusted.getUTCDate()).padStart(2, "0");
+      const hour = String(adjusted.getUTCHours());
+      const minute = String(adjusted.getUTCMinutes()).padStart(2, "0");
+      return `${year}-${month}-${day} ${hour}:${minute}`;
+    };
+
+    const normalizeAlert = (alert) => {
+      const rawTs = alert.createdAt || alert.date || alert.time;
+      const formatted = formatTimestamp(rawTs);
+      return {
+        ...alert,
+        createdAt: rawTs,
+        timestamp: formatted || alert.time || alert.date || "",
+        time: formatted || alert.time || "",
+        date: formatted || alert.date || "",
+      };
+    };
+
     const load = (isFirstLoad) => {
       fetchAlerts()
         .then(data => {
           if (cancelled) return;
-          setAlerts(data);
+          const items = (data || []).map(normalizeAlert);
+          items.sort((a, b) => new Date(b.createdAt || b.date || b.time || 0) - new Date(a.createdAt || a.date || a.time || 0));
+          setAlerts(items);
           setFetchError("");
           // If we arrived here from a notification click, auto-open that alert
           if (isFirstLoad && initialAlertId) {
-            const target = data.find(a => a.id === initialAlertId);
+            const target = items.find(a => a.id === initialAlertId);
             if (target) {
               setDetailAlert(target);
               setExpanded(target.id);
@@ -427,7 +458,7 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId, onAl
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                       <span style={{ ...S.badge(typeColor), fontSize: 11 }}>{a.type}</span>
-                      <span style={{ fontSize: 12, color: C.muted }}>{a.time}</span>
+                      <span style={{ fontSize: 12, color: C.muted }}>{a.timestamp || a.time}</span>
                     </div>
                   </div>
                   {a.from && (
@@ -437,7 +468,7 @@ export default function Alerts({ user, initialAlertId, clearInitialAlertId, onAl
                   )}
                   <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
                     <span style={{ ...S.badge(C.blue), fontSize: 10, marginRight: 6 }}>{a.category}</span>
-                    {a.date}
+                    {a.timestamp || a.date}
                   </div>
                   <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5 }}>
                     {isExpanded ? a.desc : (a.desc || "").slice(0, 100) + (a.desc?.length > 100 ? "..." : "")}

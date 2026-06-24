@@ -13,7 +13,11 @@ const TYPE_COLOR = {
 const CATEGORIES = ["All","SLA Breach","Supplier Risk","Inventory","System","SLA","Escalation"];
 
 export default function Alerts({ user }) {
-  const [alerts,     setAlerts]     = useState(() => getAlertsForRole(user?.role || "admin"));
+  const [alerts,     setAlerts]     = useState(() => {
+    const items = getAlertsForRole(user?.role || "admin").slice();
+    items.sort((a, b) => new Date(b.date) - new Date(a.date));
+    return items;
+  });
   const [filter,     setFilter]     = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
   const [expanded,   setExpanded]   = useState(null);

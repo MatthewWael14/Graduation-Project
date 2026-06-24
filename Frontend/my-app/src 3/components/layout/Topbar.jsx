@@ -13,7 +13,11 @@ function useOutsideClick(ref, handler) {
 export default function Topbar({ activePage, onNavigate, user, onLogout }) {
   const [notifOpen,     setNotifOpen]     = useState(false);
   const [profileOpen,   setProfileOpen]   = useState(false);
-  const [notifications, setNotifications] = useState(() => getAlertsForRole(user?.role || 'admin'));
+  const [notifications, setNotifications] = useState(() => {
+    const items = getAlertsForRole(user?.role || 'admin').slice();
+    items.sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
+    return items;
+  });
   const notifRef   = useRef(null);
   const profileRef = useRef(null);
   useOutsideClick(notifRef,   () => setNotifOpen(false));

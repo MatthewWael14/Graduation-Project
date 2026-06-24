@@ -19,7 +19,6 @@ function SLAModal({ sla, onClose }) {
           {[
             ["Supplier", sla.supplier || "—"],
             ["Material", sla.material || "—"],
-            ["Delivery Deadline", sla.deadline || "—"],
             ["Compliance Rate", sla.compliance !== undefined ? `${sla.compliance}%` : "—"],
             ["Risk Level", sla.risk || "—"],
             ["Penalty Rate", sla.penalty || "—"],

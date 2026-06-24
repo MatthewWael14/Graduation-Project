@@ -795,7 +795,7 @@ def get_alerts() -> list[dict]:
     """
     query = f"""
     {PREFIXES}
-    SELECT ?alertId ?title ?desc ?intendedFor ?status ?severity ?category ?materialName ?supplierName
+    SELECT ?alertId ?title ?desc ?intendedFor ?status ?severity ?category ?materialName ?supplierName ?createdAt
     WHERE {{
         ?alert rdf:type :SystemAlert ;
                :hasTitle ?title ;
@@ -806,9 +806,10 @@ def get_alerts() -> list[dict]:
         OPTIONAL {{ ?alert :hasCategory ?category . }}
         OPTIONAL {{ ?alert :hasMaterialName ?materialName . }}
         OPTIONAL {{ ?alert :hasSupplierName ?supplierName . }}
+        OPTIONAL {{ ?alert :createdAt ?createdAt . }}
         BIND(REPLACE(STR(?alert), "^.*#", "") AS ?alertId)
     }}
-    ORDER BY DESC(?alertId)
+    ORDER BY DESC(?createdAt) DESC(?alertId)
     """
     rows = graphdb.execute_sparql_select(query)
 
@@ -847,6 +848,7 @@ def get_alerts() -> list[dict]:
             else:
                 alert_type = "LOW"
 
+        created_at = r.get("createdAt")
         alerts.append({
             "id":           alert_id,
             "icon":         icon,
@@ -854,8 +856,9 @@ def get_alerts() -> list[dict]:
             "category":     category,
             "title":        title,
             "desc":         desc,
-            "time":         "Live ML Alert",
-            "date":         "Knowledge Graph",
+            "time":         created_at or "Live ML Alert",
+            "date":         created_at or "Knowledge Graph",
+            "createdAt":    created_at,
             "unread":       (status == "UNREAD"),
             "from":         "Risk Engine",
             "fromRole":     "AI",
@@ -998,11 +1001,13 @@ def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
     Returns the alert_id created.
     """
     import hashlib, time as _time
+    from datetime import datetime
     alert_id = "NEWMAT_" + hashlib.md5(f"{material_name}{supplier_name}{_time.time()}".encode()).hexdigest()[:8].upper()
     safe_mat = material_name.replace('"', '\\"')
     safe_sup = supplier_name.replace('"', '\\"')
     title = "New Material Requires Assembly Line Assignment"
     desc = f"Material '{safe_mat}' from supplier '{safe_sup}' has been added via SLA upload but has no linked assembly line. Please assign it to an existing production process."
+    created_at = datetime.utcnow().isoformat() + "Z"
     q = f"""
     {PREFIXES}
     INSERT DATA {{
@@ -1015,7 +1020,8 @@ def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
                         :hasSeverity "HIGH" ;
                         :hasCategory "New Material" ;
                         :hasMaterialName "{safe_mat}" ;
-                        :hasSupplierName "{safe_sup}" .
+                        :hasSupplierName "{safe_sup}" ;
+                        :createdAt "{created_at}"^^xsd:dateTime .
         }}
     }}
     """
