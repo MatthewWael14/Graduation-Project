@@ -12,10 +12,11 @@ import { ROLE_HOME, ROLE_PAGES } from "./auth/roles";
 import "./styles/dashboard.css";
 
 export default function App() {
-  const [user,        setUser]        = useState(null);
-  const [activePage,  setActivePage]  = useState("dashboard");
-  const [refreshKey,  setRefreshKey]  = useState(0);
-  const [aiPrompt,    setAiPrompt]    = useState("");
+  const [user,          setUser]          = useState(null);
+  const [activePage,    setActivePage]    = useState("dashboard");
+  const [refreshKey,    setRefreshKey]    = useState(0);
+  const [aiPrompt,      setAiPrompt]      = useState("");
+  const [initialAlertId, setInitialAlertId] = useState(null);
 
   const handleLogin    = (u) => { setUser(u); setActivePage(ROLE_HOME[u.role] || "dashboard"); };
   const handleLogout   = ()  => { setUser(null); setActivePage("dashboard"); };
@@ -24,6 +25,11 @@ export default function App() {
       setActivePage(page);
       if (page === "ai" && typeof data === "string") {
         setAiPrompt(data);
+      }
+      if (page === "alerts" && data?.alertId) {
+        setInitialAlertId(data.alertId);
+      } else if (page !== "alerts") {
+        setInitialAlertId(null);
       }
     }
   };
@@ -41,7 +47,7 @@ export default function App() {
       case "suppliers":  return <Suppliers      {...props} />;
       case "violations": return <SLAViolations  {...props} />;
       case "ai":         return <ChatAssistant  {...props} initialPrompt={aiPrompt} clearInitialPrompt={() => setAiPrompt("")} />;
-      case "alerts":     return <Alerts         {...props} />;
+      case "alerts":     return <Alerts         {...props} initialAlertId={initialAlertId} clearInitialAlertId={() => setInitialAlertId(null)} />;
       default:           return <Dashboard      {...props} />;
     }
   };

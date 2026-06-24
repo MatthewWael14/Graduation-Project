@@ -31,13 +31,19 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
 
     fetchAlerts().then(data => {
       if (Array.isArray(data)) {
-        const filteredData = data.filter(a => !user || user.role === "admin" || !a.roles || a.roles.includes(user.role));
+        let filteredData = data.filter(a => !user || user.role === "admin" || !a.roles || a.roles.includes(user.role));
+        // Sort so UNREAD are at the top
+        filteredData.sort((a, b) => (a.unread === b.unread ? 0 : a.unread ? -1 : 1));
         setNotifications(filteredData);
       }
     }).catch(console.error);
   };
 
-  useEffect(() => { loadTopbarData(); }, [user]);
+  useEffect(() => { 
+    loadTopbarData(); 
+    const intervalId = setInterval(loadTopbarData, 5000);
+    return () => clearInterval(intervalId);
+  }, [user]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -65,8 +71,10 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
       {/* Status badges */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 16 }}>
         <span style={{ ...S.badge(C.green), fontSize: 10 }} className="live-pulse">● REASONER ACTIVE</span>
-        {riskCount > 0 && (
-          <span style={{ ...S.badge(C.orange), fontSize: 10 }}>⚠ {riskCount} RISK{riskCount > 1 ? 'S' : ''}</span>
+        {riskCount > 0 ? (
+          <span style={{ ...S.badge(C.orange), fontSize: 10 }}>⚠ {riskCount} RISK{riskCount !== 1 ? 'S' : ''}</span>
+        ) : (
+          <span style={{ ...S.badge(C.green), fontSize: 10 }}>0 RISKS</span>
         )}
       </div>
 
@@ -148,7 +156,11 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
                 ) : (
                   notifications.slice(0, 5).map(n => (
                     <div key={n.id}
-                      onClick={() => setNotifications(p => p.map(x => x.id === n.id ? { ...x, unread: false } : x))}
+                      onClick={() => {
+                        setNotifications(p => p.map(x => x.id === n.id ? { ...x, unread: false } : x));
+                        setNotifOpen(false);
+                        onNavigate("alerts", { alertId: n.id });
+                      }}
                       style={{ padding: "10px 14px", cursor: "pointer", background: n.unread ? "rgba(245,158,11,0.04)" : "transparent", borderBottom: `1px solid ${C.border}22`, display: "flex", gap: 10 }}>
                       <span style={{ fontSize: 13 }}>{n.icon || "🔔"}</span>
                       <div style={{ flex: 1 }}>
@@ -226,16 +238,7 @@ export default function Topbar({ activePage, onNavigate, user, onLogout, onRefre
                 </div>
               </div>
 
-              {/* Menu items */}
-              {[["👤", "My Profile"], ["⚙", "Settings"]].map(([icon, label], i) => (
-                <div key={i} className="nav-item" style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  padding: "9px 14px", cursor: "pointer",
-                  fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.border}22`,
-                }}>
-                  <span>{icon}</span>{label}
-                </div>
-              ))}
+
 
               {/* Sign out */}
               <div onClick={onLogout} style={{

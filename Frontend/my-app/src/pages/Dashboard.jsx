@@ -23,7 +23,10 @@ const buildKpiCards = (kpis) => [
   {
     label: "At-Risk Shipments",
     value: kpis.at_risk_shipments !== undefined ? String(kpis.at_risk_shipments) : "—",
-    change: "", up: false, color: C.orange, icon: "⚠",
+    change: "", 
+    up: kpis.at_risk_shipments === 0, 
+    color: kpis.at_risk_shipments > 0 ? C.orange : C.green, 
+    icon: kpis.at_risk_shipments > 0 ? "⚠" : "✅",
   },
   {
     label: "SLA Compliance",

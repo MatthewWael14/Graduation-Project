@@ -125,8 +125,7 @@ def create_contract_graph(contract: SLAContract) -> dict:
 
     DELETE {{
         GRAPH <{CONTRACT_GRAPH}> {{
-            :{supplier_uri} :leadTimeDays ?oldLeadTime .{old_process_delete}
-            :{supplier_uri} :penaltyClause ?oldPenalty .
+            {old_process_delete}
             :{supplier_uri} :hasReliabilityScore ?oldScore .
             :{material_uri} :hasUnitCost ?oldUnitCost .
             :{material_uri} :hasOrderedQuantity ?oldQty .
@@ -155,10 +154,6 @@ def create_contract_graph(contract: SLAContract) -> dict:
             # ── Relationship: Supplier supplies RawMaterial ──
             :{supplier_uri}  :supplies      :{material_uri} .
 
-            # ── SLA Properties on the Supplier ──
-            :{supplier_uri}  :leadTimeDays  {lead_days} ;
-                             :penaltyClause "{raw_penalty}" .
-
             # ── Preserved or Default Reliability Score ──
             :{supplier_uri}  :hasReliabilityScore ?finalScore .
 
@@ -173,16 +168,6 @@ def create_contract_graph(contract: SLAContract) -> dict:
         }}
     }}
     WHERE {{
-        OPTIONAL {{
-            GRAPH <{CONTRACT_GRAPH}> {{
-                :{supplier_uri} :leadTimeDays ?oldLeadTime .
-            }}
-        }}
-        OPTIONAL {{
-            GRAPH <{CONTRACT_GRAPH}> {{
-                :{supplier_uri} :penaltyClause ?oldPenalty .
-            }}
-        }}
         OPTIONAL {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{supplier_uri} :hasReliabilityScore ?oldScore .

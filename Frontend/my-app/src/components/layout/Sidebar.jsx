@@ -25,7 +25,7 @@ export default function Sidebar({ activePage, onNavigate, user }) {
           }}>◈</div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.text, letterSpacing: "-0.01em" }}>
-              Digital Twin
+              Semantic Digital Twin
             </div>
             <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>Supply Chain v1.0</div>
           </div>

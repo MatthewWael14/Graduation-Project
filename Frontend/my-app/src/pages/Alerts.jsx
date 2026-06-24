@@ -10,15 +10,143 @@ const TYPE_COLOR = {
   ESCALATION: C.purple,
 };
 
-const CATEGORIES = ["All", "SLA Breach", "Supplier Risk", "Inventory", "System", "SLA", "Escalation"];
+const TYPE_ICON = {
+  CRITICAL: "🚨",
+  HIGH: "⚠️",
+  INFO: "ℹ️",
+  LOW: "✅",
+  ESCALATION: "📩",
+};
 
-export default function Alerts({ user }) {
+// ── Detail Modal ─────────────────────────────────────────────────────────────
+function AlertDetailModal({ alert: a, onClose, onDismiss }) {
+  if (!a) return null;
+  const typeColor = TYPE_COLOR[a.type] || C.muted;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: C.surface, borderRadius: 16, width: "100%", maxWidth: 560,
+          border: `1px solid ${C.border}`,
+          boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+          overflow: "hidden",
+          maxHeight: "90vh",
+          display: "flex", flexDirection: "column",
+        }}
+      >
+        {/* Header stripe */}
+        <div style={{
+          borderLeft: `6px solid ${typeColor}`,
+          padding: "20px 24px",
+          borderBottom: `1px solid ${C.border}`,
+          display: "flex", alignItems: "flex-start", gap: 16,
+          flexShrink: 0,
+        }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 12,
+            background: typeColor + "20",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 24, flexShrink: 0,
+          }}>
+            {a.icon || TYPE_ICON[a.type] || "🔔"}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+              <span style={{ ...S.badge(typeColor), fontSize: 11 }}>{a.type}</span>
+              <span style={{ ...S.badge(C.blue), fontSize: 11 }}>{a.category}</span>
+              {a.unread && <span style={{ ...S.badge(C.accent), fontSize: 11 }}>UNREAD</span>}
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, lineHeight: 1.4 }}>{a.title}</div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", color: C.muted, fontSize: 20, cursor: "pointer", lineHeight: 1, padding: 4, flexShrink: 0 }}
+          >✕</button>
+        </div>
+
+        {/* Scrollable body */}
+        <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1 }}>
+          {/* Full description */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>
+              Description
+            </div>
+            <div style={{
+              fontSize: 14, color: C.text, lineHeight: 1.7,
+              background: C.bg, borderRadius: 10, padding: "14px 16px",
+              border: `1px solid ${C.border}`,
+            }}>
+              {a.desc || "No additional description available."}
+            </div>
+          </div>
+
+          {/* Metadata grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+            {[
+              { label: "Severity", value: a.type, color: typeColor },
+              { label: "Category", value: a.category },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: color || C.text }}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Escalation notice */}
+          {a.type === "ESCALATION" && (
+            <div style={{
+              background: C.purple + "10", border: `1px solid ${C.purple}33`,
+              borderRadius: 10, padding: "12px 16px", marginBottom: 8,
+              display: "flex", gap: 10, alignItems: "flex-start",
+            }}>
+              <span style={{ fontSize: 18 }}>📩</span>
+              <div style={{ fontSize: 13, color: C.purple, lineHeight: 1.5 }}>
+                This alert was escalated by <strong>{a.from}</strong> ({a.fromRole}) and requires your acknowledgment.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer actions */}
+        <div style={{ padding: "14px 24px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, justifyContent: "flex-end", flexShrink: 0 }}>
+          {a.type === "ESCALATION" && (
+            <button style={{ ...S.btn(), fontSize: 13 }}>✓ Acknowledge</button>
+          )}
+          <button
+            onClick={() => { onDismiss(a.id); onClose(); }}
+            style={{ ...S.btn("ghost"), fontSize: 13, color: C.red, borderColor: C.red + "55" }}
+          >
+            Dismiss Alert
+          </button>
+          <button onClick={onClose} style={{ ...S.btn("secondary"), fontSize: 13 }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function Alerts({ user, initialAlertId, clearInitialAlertId }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
   const [filter, setFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
   const [expanded, setExpanded] = useState(null);
+  const [detailAlert, setDetailAlert] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,11 +157,18 @@ export default function Alerts({ user }) {
           if (cancelled) return;
           setAlerts(data);
           setFetchError("");
+          // If we arrived here from a notification click, auto-open that alert
+          if (isFirstLoad && initialAlertId) {
+            const target = data.find(a => a.id === initialAlertId);
+            if (target) {
+              setDetailAlert(target);
+              setExpanded(target.id);
+            }
+            if (clearInitialAlertId) clearInitialAlertId();
+          }
         })
         .catch(err => {
           if (cancelled) return;
-          // Don't blank the list on a transient poll failure — only
-          // surface the error banner, keep showing the last good data.
           setFetchError(err.message);
         })
         .finally(() => {
@@ -42,17 +177,9 @@ export default function Alerts({ user }) {
     };
 
     load(true);
-
-    // Poll for new real-time alerts (production disruptions, SLA
-    // violations, etc.) every 5s so managers see them without a
-    // manual page refresh.
     const intervalId = setInterval(() => load(false), 5000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, []);
+    return () => { cancelled = true; clearInterval(intervalId); };
+  }, [initialAlertId]);
 
   const markRead = async (id) => {
     setAlerts(p => p.map(a => a.id === id ? { ...a, unread: false } : a));
@@ -62,8 +189,10 @@ export default function Alerts({ user }) {
   const markAllRead = async () => {
     const unreadIds = alerts.filter(a => a.unread).map(a => a.id);
     setAlerts(p => p.map(a => ({ ...a, unread: false })));
-    for (const id of unreadIds) {
-      try { await markAlertRead(id); } catch (e) { console.error("Failed to mark read:", e); }
+    try {
+      await Promise.all(unreadIds.map(id => markAlertRead(id)));
+    } catch (e) {
+      console.error("Failed to mark all read:", e);
     }
   };
 
@@ -74,7 +203,14 @@ export default function Alerts({ user }) {
 
   const filtered = alerts.filter(a => {
     const roleMatch = !user || user.role === "admin" || !a.roles || a.roles.includes(user.role);
-    const catMatch = filter === "All" || a.category === filter;
+    let catMatch = filter === "All" || a.category === filter;
+    if (filter === "Production Disruption") {
+      const text = ((a.title || "") + " " + (a.desc || "")).toLowerCase();
+      catMatch = text.includes("disruption") || a.category === "Production Disruption";
+    } else if (filter === "New Material") {
+      const text = ((a.title || "") + " " + (a.desc || "")).toLowerCase();
+      catMatch = text.includes("new material") || text.includes("material shortage") || a.category === "New Material";
+    }
     const typeMatch = typeFilter === "All" || a.type === typeFilter;
     return roleMatch && catMatch && typeMatch;
   });
@@ -84,6 +220,13 @@ export default function Alerts({ user }) {
 
   return (
     <div>
+      {/* Detail modal */}
+      <AlertDetailModal
+        alert={detailAlert}
+        onClose={() => setDetailAlert(null)}
+        onDismiss={dismiss}
+      />
+
       <div style={{ ...S.pageHeader, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -121,7 +264,6 @@ export default function Alerts({ user }) {
         </div>
       )}
 
-      {/* Loading state */}
       {loading && (
         <div style={{ ...S.card, textAlign: "center", padding: "40px", color: C.accent, marginBottom: 16 }}>
           <div style={{ fontSize: 24, marginBottom: 10 }} className="spin">⚙</div>
@@ -129,7 +271,6 @@ export default function Alerts({ user }) {
         </div>
       )}
 
-      {/* Backend error */}
       {fetchError && (
         <div style={{ padding: "12px 16px", background: C.red + "15", border: `1px solid ${C.red}33`, borderRadius: 8, fontSize: 13, color: C.red, marginBottom: 16 }}>
           ⚠ Backend error: {fetchError} — Check that the server is running at <strong>http://localhost:8001</strong>
@@ -137,12 +278,11 @@ export default function Alerts({ user }) {
       )}
 
       {/* Summary KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
         {[
           { label: "Total Alerts", value: alerts.length, color: C.blue },
           { label: "Unread", value: unreadCount, color: C.red },
           { label: "Critical / High", value: alerts.filter(a => a.type === "CRITICAL" || a.type === "HIGH").length, color: C.orange },
-          { label: "Escalations", value: escalations.length, color: C.purple },
         ].map((k, i) => (
           <div key={i} style={{ ...S.card, borderTop: `3px solid ${k.color}`, padding: 16 }}>
             <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.07em" }}>{k.label}</div>
@@ -154,7 +294,13 @@ export default function Alerts({ user }) {
       {/* Filters */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {CATEGORIES.map(cat => (
+          {[
+            "All",
+            "SLA Breach",
+            "Inventory",
+            ...(!user || user.role === "admin" || user.role === "production" ? ["New Material"] : []),
+            ...(!user || user.role === "admin" || user.role === "production" || user.role === "logistics" ? ["Production Disruption"] : [])
+          ].map(cat => (
             <button key={cat} className="tab-btn" onClick={() => setFilter(cat)} style={{
               padding: "5px 12px", borderRadius: 6,
               background: filter === cat ? C.accent : "transparent",
@@ -167,7 +313,7 @@ export default function Alerts({ user }) {
         </div>
         <div style={{ width: 1, background: C.border }} />
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {["All", "CRITICAL", "HIGH", "ESCALATION", "INFO", "LOW"].map(type => (
+          {["All", "CRITICAL", "HIGH", "LOW"].map(type => (
             <button key={type} className="tab-btn" onClick={() => setTypeFilter(type)} style={{
               padding: "5px 12px", borderRadius: 6,
               background: typeFilter === type ? (TYPE_COLOR[type] || C.accent) + "22" : "transparent",
@@ -180,7 +326,6 @@ export default function Alerts({ user }) {
         </div>
       </div>
 
-      {/* Empty state — shown until backend alerts are connected */}
       {filtered.length === 0 && (
         <div style={{ ...S.card, textAlign: "center", padding: "56px 24px" }}>
           <div style={{ fontSize: 44, marginBottom: 14 }}>🔔</div>
@@ -191,17 +336,19 @@ export default function Alerts({ user }) {
         </div>
       )}
 
-      {/* Alert cards — rendered when real alerts come in */}
+      {/* Alert cards */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {filtered.map(a => {
           const typeColor = TYPE_COLOR[a.type] || C.muted;
           const isExpanded = expanded === a.id;
           return (
             <div key={a.id} style={{ ...S.card, borderLeft: `4px solid ${typeColor}`, padding: 0, overflow: "hidden", opacity: a.unread ? 1 : 0.75, transition: "all 0.15s" }}>
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px", cursor: "pointer" }}
-                onClick={() => { setExpanded(isExpanded ? null : a.id); markRead(a.id); }}>
+              <div
+                style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px", cursor: "pointer" }}
+                onClick={() => { setExpanded(isExpanded ? null : a.id); markRead(a.id); }}
+              >
                 <div style={{ width: 42, height: 42, borderRadius: 10, flexShrink: 0, background: typeColor + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
-                  {a.icon}
+                  {a.icon || TYPE_ICON[a.type] || "🔔"}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
@@ -235,9 +382,16 @@ export default function Alerts({ user }) {
                   {a.type === "ESCALATION" && (
                     <button style={{ ...S.btn(), fontSize: 12, padding: "6px 14px" }}>✓ Acknowledge</button>
                   )}
-                  <button style={{ ...S.btn("secondary"), fontSize: 12, padding: "6px 14px" }}>View Details</button>
-                  <button onClick={e => { e.stopPropagation(); dismiss(a.id); }}
-                    style={{ ...S.btn("ghost"), fontSize: 12, padding: "6px 14px", marginLeft: "auto", color: C.red }}>
+                  <button
+                    onClick={e => { e.stopPropagation(); markRead(a.id); setDetailAlert(a); }}
+                    style={{ ...S.btn("secondary"), fontSize: 12, padding: "6px 14px" }}
+                  >
+                    View Details
+                  </button>
+                  <button
+                    onClick={e => { e.stopPropagation(); dismiss(a.id); }}
+                    style={{ ...S.btn("ghost"), fontSize: 12, padding: "6px 14px", marginLeft: "auto", color: C.red }}
+                  >
                     Dismiss
                   </button>
                 </div>

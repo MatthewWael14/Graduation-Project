@@ -141,7 +141,12 @@ def query_context_node(state: RiskEngineState) -> RiskEngineState:
                 {{ ?supplier :supplies ?material . }}
 
                 # Get SLA terms on the supplier
-                OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+                OPTIONAL {{ 
+                    ?contract rdf:type :SLAContract ;
+                              :hasSupplier ?supplier ;
+                              :governsMaterial ?material ;
+                              :leadTimeDays ?leadTimeDays .
+                }}
                 OPTIONAL {{ ?supplier :penaltyClause ?penaltyRate . }}
             }}
 

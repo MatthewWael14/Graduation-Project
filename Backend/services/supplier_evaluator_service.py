@@ -427,7 +427,12 @@ def record_telemetry_transaction_and_update_score(delivery_id: str, delay_hours:
         
         OPTIONAL {{ ?supplier :hasReliabilityTier ?supplierTier . }}
         OPTIONAL {{ ?supplier :hasReliabilityScore ?esgScore . }}
-        OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{ 
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?supplier ;
+                      :governsMaterial ?material ;
+                      :leadTimeDays ?leadTimeDays .
+        }}
         OPTIONAL {{
             {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
             OPTIONAL {{ ?sla :hasSLALeadTime ?slaLeadTimeHours . }}
@@ -627,7 +632,12 @@ def record_placed_order_and_update_score(supplier_id: str, material_id: str, qua
         
         OPTIONAL {{
             ?supplier :supplies ?material .
-            OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+            OPTIONAL {{ 
+                ?contract rdf:type :SLAContract ;
+                          :hasSupplier ?supplier ;
+                          :governsMaterial ?material ;
+                          :leadTimeDays ?leadTimeDays .
+            }}
         }}
         
         # Look for template delivery details

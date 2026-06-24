@@ -29,7 +29,7 @@ function SLAModal({ sla, onClose }) {
           ].map(([k, v], i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}22`, fontSize: 13 }}>
               <span style={{ color: C.muted }}>{k}</span>
-              <span style={{ fontWeight: 600, color: k === "Status" && sla.violationStatus ? C.green : C.text }}>{v}</span>
+              <span style={{ fontWeight: 600, color: k === "Status" ? (sla.violationStatus ? C.red : C.green) : C.text }}>{v}</span>
             </div>
           ))}
           <div style={{ marginTop: 16 }}>

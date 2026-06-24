@@ -4,7 +4,7 @@ import { uploadSLAPdf, confirmSLA } from "../services/api";
 
 // ── Field must be defined OUTSIDE the parent component so React
 // does not remount it on every keystroke (which caused typing to break)
-function Field({ label, field, type = "text", editedFields, setEditedFields }) {
+function Field({ label, field, type = "text", editedFields, setEditedFields, error }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
@@ -14,8 +14,9 @@ function Field({ label, field, type = "text", editedFields, setEditedFields }) {
         type={type}
         value={editedFields[field] || ""}
         onChange={e => setEditedFields(p => ({ ...p, [field]: e.target.value }))}
-        style={S.input}
+        style={{ ...S.input, borderColor: error ? C.red : C.border, background: error ? C.red + "0A" : C.bg }}
       />
+      {error && <div style={{ color: C.red, fontSize: 11, marginTop: 4, fontWeight: 500 }}>{error}</div>}
     </div>
   );
 }
@@ -27,6 +28,7 @@ export default function SLAUpload({ user }) {
   const [editedFields, setEditedFields] = useState({});
   const [confirmed,    setConfirmed]    = useState(null);
   const [error,        setError]        = useState("");
+  const [formErrors,   setFormErrors]   = useState({});
   const [pipelineStep, setPipelineStep] = useState(0);
 
   const pipelineSteps = [
@@ -38,7 +40,7 @@ export default function SLAUpload({ user }) {
 
   const handleFile = async (file) => {
     if (!file) return;
-    setStep("extracting"); setError(""); setExtraction(null); setConfirmed(null); setPipelineStep(0);
+    setStep("extracting"); setError(""); setFormErrors({}); setExtraction(null); setConfirmed(null); setPipelineStep(0);
 
     // Animate pipeline steps while uploading
     const stepTimer = setInterval(() => {
@@ -56,8 +58,8 @@ export default function SLAUpload({ user }) {
         lead_time_days: result.mapped_sla?.lead_time_days || Math.ceil((result.extracted_data?.sla_lead_time_hours || 0) / 24) || "",
         penalty_clause: result.mapped_sla?.penalty_clause || `$${result.extracted_data?.delay_penalty_rate || 0}/day` || "",
         corrections:    "",
-        quantity:       result.mapped_sla?.quantity       || result.extracted_data?.quantity       || 100,
-        unit_cost:      result.mapped_sla?.unit_cost      || result.extracted_data?.unit_cost      || 15.0,
+        quantity:       result.mapped_sla?.quantity       || result.extracted_data?.quantity       || "",
+        unit_cost:      result.mapped_sla?.unit_cost      || result.extracted_data?.unit_cost      || "",
         impacted_process: result.mapped_sla?.impacted_process || "",
       });
       setStep("review");
@@ -76,6 +78,22 @@ export default function SLAUpload({ user }) {
   const handleBrowse = (e) => handleFile(e.target?.files?.[0]);
 
   const handleConfirm = async () => {
+    // Validate required fields
+    const newErrors = {};
+    if (!editedFields.supplier_name) newErrors.supplier_name = "Supplier Name is required";
+    if (!editedFields.material) newErrors.material = "Material is required";
+    if (!editedFields.lead_time_days) newErrors.lead_time_days = "Lead Time is required";
+    if (!editedFields.penalty_clause) newErrors.penalty_clause = "Penalty Clause is required";
+    if (!editedFields.quantity) newErrors.quantity = "Quantity is required";
+    if (!editedFields.unit_cost) newErrors.unit_cost = "Unit Cost is required";
+    if (!editedFields.impacted_process) newErrors.impacted_process = "Impacted Process is required";
+
+    if (Object.keys(newErrors).length > 0) {
+      setFormErrors(newErrors);
+      return;
+    }
+    setFormErrors({});
+    
     setStep("confirming");
     try {
       const result = await confirmSLA({
@@ -193,12 +211,12 @@ export default function SLAUpload({ user }) {
                 </div>
               )}
 
-              <Field label="Supplier Name"   field="supplier_name"  editedFields={editedFields} setEditedFields={setEditedFields} />
-              <Field label="Material"         field="material"       editedFields={editedFields} setEditedFields={setEditedFields} />
-              <Field label="Lead Time (Days)" field="lead_time_days" type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
-              <Field label="Penalty Clause"   field="penalty_clause" editedFields={editedFields} setEditedFields={setEditedFields} />
-              <Field label="Quantity"         field="quantity"       type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
-              <Field label="Unit Cost ($)"    field="unit_cost"      type="number" editedFields={editedFields} setEditedFields={setEditedFields} />
+              <Field label="Supplier Name"   field="supplier_name"  editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.supplier_name} />
+              <Field label="Material"         field="material"       editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.material} />
+              <Field label="Lead Time (Days)" field="lead_time_days" type="number" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.lead_time_days} />
+              <Field label="Penalty Clause"   field="penalty_clause" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.penalty_clause} />
+              <Field label="Quantity"         field="quantity"       type="number" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.quantity} />
+              <Field label="Unit Cost ($)"    field="unit_cost"      type="number" editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.unit_cost} />
               
               <div style={{ marginBottom: 12 }}>
                 <label style={{ fontSize: 12, color: C.muted, display: "block", marginBottom: 5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
@@ -207,15 +225,16 @@ export default function SLAUpload({ user }) {
                 <select
                   value={editedFields.impacted_process || ""}
                   onChange={e => setEditedFields(p => ({ ...p, impacted_process: e.target.value }))}
-                  style={S.input}
+                  style={{ ...S.input, borderColor: formErrors.impacted_process ? C.red : C.border, background: formErrors.impacted_process ? C.red + "0A" : C.bg }}
                 >
-                  <option value="">-- Select Assembly Line --</option>
-                  <option value="EV_Battery_Assembly_Line">EV Battery Assembly Line</option>
-                  <option value="Electronics_SubAssembly_Line">Electronics SubAssembly Line</option>
-                  <option value="Main_Assembly_Line">Main Assembly Line</option>
-                  <option value="Chemical_Mixing_Phase">Chemical Mixing Phase</option>
-                  <option value="Coating_Process">Coating Process</option>
+                  <option value="" style={{ background: C.bg, color: C.text }}>-- Select Assembly Line --</option>
+                  <option value="EV_Battery_Assembly_Line" style={{ background: C.bg, color: C.text }}>EV Battery Assembly Line</option>
+                  <option value="Electronics_SubAssembly_Line" style={{ background: C.bg, color: C.text }}>Electronics SubAssembly Line</option>
+                  <option value="Main_Assembly_Line" style={{ background: C.bg, color: C.text }}>Main Assembly Line</option>
+                  <option value="Chemical_Mixing_Phase" style={{ background: C.bg, color: C.text }}>Chemical Mixing Phase</option>
+                  <option value="Coating_Process" style={{ background: C.bg, color: C.text }}>Coating Process</option>
                 </select>
+                {formErrors.impacted_process && <div style={{ color: C.red, fontSize: 11, marginTop: 4, fontWeight: 500 }}>{formErrors.impacted_process}</div>}
               </div>
 
               <div style={{ marginBottom: 16 }}>

@@ -80,7 +80,12 @@ def get_risk_scores() -> list[dict]:
             BIND(COALESCE(?prodLabel, REPLACE(STR(?product), "^.*#", "")) AS ?productName)
         }}
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
-        OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{ 
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?supplier ;
+                      :governsMaterial ?material ;
+                      :leadTimeDays ?leadTimeDays .
+        }}
         OPTIONAL {{ ?supplier :country ?country . }}
         OPTIONAL {{ ?material :hasInventoryStock ?stock . }}
         OPTIONAL {{ ?material :hasSafetyStockLevel ?safetyStock . }}
@@ -192,7 +197,12 @@ def get_compliance_alerts() -> list[dict]:
         OPTIONAL {{ ?material rdfs:label ?mLabel . }}
         BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
 
-        OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{ 
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?supplier ;
+                      :governsMaterial ?material ;
+                      :leadTimeDays ?leadTimeDays .
+        }}
         OPTIONAL {{
             {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
             OPTIONAL {{ ?sla :hasSLALeadTime ?slaLeadTimeHours . }}
@@ -302,9 +312,18 @@ def get_compliance_alerts() -> list[dict]:
     assigned_violations = set()
     alerts = []
 
+    import re
     for row in rows:
         supplier_name = row.get("supplierName", "Unknown")
         material_name = row.get("materialName", "Unknown")
+        
+        # Extract penalty_rate directly from penalty clause if missing
+        penalty_rate = float(row.get("penaltyRate", 0) or 0)
+        if penalty_rate == 0:
+            penalty_clause = str(row.get("penalty", "") or "")
+            match = re.search(r'\$?(\d+(\.\d+)?)', penalty_clause)
+            if match:
+                row["penaltyRate"] = float(match.group(1))
         
         # Find matching violation
         matched_violation = None
@@ -516,7 +535,12 @@ def get_fallback_options(material_id: str) -> list[dict]:
         OPTIONAL {{ ?supplier :hasName ?name . }}
         BIND(COALESCE(?label, ?name, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierName)
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
-        OPTIONAL {{ ?supplier :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier ?supplier ;
+                      :governsMaterial ?material ;
+                      :leadTimeDays ?leadTimeDays .
+        }}
         OPTIONAL {{ ?supplier :country ?country . }}
         
         # Get capacity from SLAContract governing the material
@@ -691,9 +715,9 @@ def get_kpis() -> dict:
     rows_sup = graphdb.execute_sparql_select(q_suppliers)
     active_suppliers = int(rows_sup[0].get("count", 0)) if rows_sup else 0
 
-    # Count at-risk materials based on actual delayed deliveries
-    impacted = _get_impacted_cached()
-    at_risk_shipments = len(set(r.get("materialLabel") for r in impacted if r.get("materialLabel")))
+    # Count at-risk materials based on stock vs threshold (matches Risk Panel)
+    risk_scores = get_risk_scores()
+    at_risk_shipments = len([r for r in risk_scores if r.get("status") == "RED"])
 
     # Average lead time across all suppliers (proxy for avg delay)
     q_lead = f"""
@@ -724,7 +748,7 @@ def get_kpis() -> dict:
     total_penalty_owed = sum(a.get("penaltyOwed", 0.0) for a in alerts if a.get("violationStatus"))
 
     # SLA compliance = % of suppliers NOT at risk (simple heuristic)
-    unique_delayed_suppliers = len(set(r.get("supplierLabel") for r in impacted if r.get("supplierLabel") and r.get("supplierLabel") != "Unknown"))
+    unique_delayed_suppliers = len(set(r.get("supplierLabel") for r in risk_scores if r.get("status") == "RED" and r.get("supplierLabel") and r.get("supplierLabel") != "Unknown"))
     sla_compliance = (
         max(0, round(((active_suppliers - unique_delayed_suppliers) / active_suppliers) * 100))
         if active_suppliers > 0 else 100

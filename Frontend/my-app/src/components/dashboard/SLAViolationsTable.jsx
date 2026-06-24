@@ -10,7 +10,7 @@ export default function SLAViolationsTable({ data }) {
       <div style={{ overflowX: "auto" }}>
         <table style={S.table}>
           <thead>
-            <tr>{["ID", "Supplier", "Material", "Deadline", "Compliance", "Status", "Daily Penalty"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+            <tr>{["ID", "Supplier", "Material", "Compliance", "Status", "Daily Penalty"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {data.map((s, i) => (
@@ -18,7 +18,6 @@ export default function SLAViolationsTable({ data }) {
                 <td style={{ ...S.td, color: C.blue, fontFamily: "monospace", fontWeight: 600 }}>{s.id}</td>
                 <td style={{ ...S.td, fontWeight: 600, color: C.text }}>{s.supplier}</td>
                 <td style={{ ...S.td, color: C.muted }}>{s.material}</td>
-                <td style={S.td}>{s.deadline}</td>
                 <td style={S.td}>
                   {s.compliance !== null ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

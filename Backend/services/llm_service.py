@@ -80,7 +80,7 @@ class LLMConfig:
         )
     )
     temperature: float = 0.0
-    max_tokens: int = 800
+    max_tokens: int = 400
     fallback_enabled: bool = field(
         default_factory=lambda: os.getenv("LLM_FALLBACK_ENABLED", "true").lower()
         == "true"

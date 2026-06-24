@@ -38,7 +38,7 @@ function SupplierModal({ supplier, onClose }) {
           {(() => {
             const seen = new Set();
             return Object.entries(s)
-              .filter(([k]) => !["__type", "status"].includes(k)) // hide status too, it's in the top row
+              .filter(([k]) => !["__type", "status", "product", "productLabel", "country", "countryLabel"].includes(k)) // hide status too, it's in the top row
               .map(([k, v]) => {
                 const formattedKey = k.replace(/([A-Z])/g, " $1").replace(/ Label| Name/gi, "").trim();
                 const keyLower = formattedKey.toLowerCase();
@@ -141,7 +141,6 @@ function FallbackModal({ material, requiredQty = 100, onClose, onAssign }) {
                     <div style={{ fontSize: 12, color: C.muted, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span>
                         {s.leadTime && `Lead time: ${s.leadTime}d`}
-                        {s.country && ` · ${s.country}`}
                       </span>
                       {s.quantity !== undefined && (
                         s.quantity < requiredQty ? (
@@ -429,10 +428,7 @@ export default function Suppliers({ user }) {
                     <span style={S.riskBadge(isRed ? "HIGH" : "LOW")}>{s.status}</span>
                   </div>
                   {process && (
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: product ? 2 : 8 }}>Process: {process}</div>
-                  )}
-                  {product && (
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Product: {product}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Process: {process}</div>
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                     <div style={{ fontSize: 11, color: C.muted }}>Reliability</div>

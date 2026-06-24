@@ -89,7 +89,12 @@ def query_order_context(supplier_id: str, material_id: str) -> dict:
         # Get SLA properties from supplier
         OPTIONAL {{ {sup_ref} :hasReliabilityTier ?supplierTier }}
         OPTIONAL {{ {sup_ref} :hasReliabilityScore ?esgScore }}
-        OPTIONAL {{ {sup_ref} :leadTimeDays ?leadTimeDays }}
+        OPTIONAL {{ 
+            ?contract rdf:type :SLAContract ;
+                      :hasSupplier {sup_ref} ;
+                      :governsMaterial ?material ;
+                      :leadTimeDays ?leadTimeDays .
+        }}
         OPTIONAL {{ {sup_ref} :penaltyClause ?penaltyRate }}
         
         # Fallback to existing delivery events to fetch region/type defaults if present

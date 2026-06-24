@@ -74,6 +74,7 @@ class SLAContract(BaseModel):
     )
 
 
+
 class ExtractedSLAData(BaseModel):
     """
     Schema representing structured data extracted from an SLA contract
@@ -164,13 +165,11 @@ class ExtractedSLAData(BaseModel):
         default=0,
         ge=0,
         description="Standard order quantity or quantity covered under SLA, default to 0 if not found",
-        examples=[500],
     )
     unit_cost: float = Field(
         default=0.0,
         ge=0.0,
         description="Unit cost of the material, default to 0.0 if not found",
-        examples=[12.50],
     )
 
 
