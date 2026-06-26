@@ -15,6 +15,7 @@ from knowledge_base.repository import (
     CONTRACT_GRAPH,
     _sanitize_uri_fragment,
     find_impacted_products_by_supplier_delay,
+    find_delayed_materials,
 )
 import hashlib
 
@@ -168,13 +169,44 @@ def get_risk_scores() -> list[dict]:
             "requiredQty":      0,
         })
         seen_pairs.add((sup_key, mat_key))
-    # Post-process status purely on stock vs safety-stock threshold.
-    # An active delayed delivery does NOT independently force RED —
-    # only genuine low inventory (stock < safetyStock) triggers AT RISK.
+    # Build a lookup of (supplier, material) pairs that have an active delayed
+    # delivery, regardless of whether OWL has inferred ProductionDisruption.
+    # These become YELLOW — a proactive early-warning state so teams can request
+    # a fallback supplier before stock actually drops below the safety threshold.
+    try:
+        delayed_rows = find_delayed_materials()
+    except Exception as exc:
+        logger.warning("find_delayed_materials() failed (%s). Skipping YELLOW state.", exc)
+        delayed_rows = []
+
+    delayed_dict = {
+        (
+            _sanitize_uri_fragment(r.get("supplierLabel", "")),
+            _sanitize_uri_fragment(r.get("materialLabel", ""))
+        ): r
+        for r in delayed_rows
+    }
+
+    # Status priority: RED (stock low) > YELLOW (delay detected) > GREEN (all clear)
     for rs in risk_scores:
-        stock = rs.get("stock", 0)
+        stock     = rs.get("stock", 0)
         threshold = rs.get("threshold", 0)
-        rs["status"] = "RED" if threshold > 0 and stock < threshold else "GREEN"
+        pair      = (
+            _sanitize_uri_fragment(rs.get("supplierLabel", "")),
+            _sanitize_uri_fragment(rs.get("material", ""))
+        )
+        if threshold > 0 and stock < threshold:
+            rs["status"] = "RED"     # Stock critically low — immediate action needed
+        elif pair in delayed_dict:
+            rs["status"] = "YELLOW"  # Delay detected but stock still OK — act now proactively
+        else:
+            rs["status"] = "GREEN"
+
+        # Propagate delayed quantity if this supplier-material has active delayed delivery
+        if pair in delayed_dict:
+            delayed_info = delayed_dict[pair]
+            if delayed_info.get("reqQty") is not None:
+                rs["requiredQty"] = int(float(delayed_info["reqQty"]))
 
     return risk_scores
 
@@ -211,17 +243,27 @@ def get_compliance_alerts() -> list[dict]:
                       :hasSupplier ?supplier ;
                       :governsMaterial ?material ;
                       :leadTimeDays ?leadTimeDays .
+            OPTIONAL {{ ?contract :penaltyClause ?cPenalty . }}
+            OPTIONAL {{ ?contract :hasDelayPenaltyRate ?cPenaltyRate . }}
+            OPTIONAL {{ ?contract :hasSLALeadTime ?cLeadTimeHours . }}
         }}
         OPTIONAL {{
             {{ ?supplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?supplier . }}
-            OPTIONAL {{ ?sla :hasSLALeadTime ?slaLeadTimeHours . }}
+            OPTIONAL {{ ?sla :hasSLALeadTime ?sLeadTimeHours . }}
         }}
-        OPTIONAL {{ ?supplier :penaltyClause ?penalty . }}
+        BIND(COALESCE(?cLeadTimeHours, ?sLeadTimeHours) AS ?slaLeadTimeHours)
+        
+        OPTIONAL {{ ?supplier :penaltyClause ?sPenalty . }}
+        BIND(COALESCE(?cPenalty, ?sPenalty) AS ?penalty)
+
         OPTIONAL {{ ?supplier :hasReliabilityScore ?reliabilityScore . }}
         OPTIONAL {{ ?supplier :deliveryDeadline ?deliveryDeadline . }}
         OPTIONAL {{ ?material :deliveryDeadline ?materialDeadline . }}
         OPTIONAL {{ ?supplier :riskLevel ?riskLevel . }}
-        OPTIONAL {{ ?supplier :penaltyRatePerDay ?penaltyRate . }}
+        
+        OPTIONAL {{ ?supplier :penaltyRatePerDay ?sPenaltyRate . }}
+        BIND(COALESCE(?cPenaltyRate, ?sPenaltyRate) AS ?penaltyRate)
+        
         OPTIONAL {{ ?supplier :clause ?clause . }}
         OPTIONAL {{ ?supplier :createdAt ?createdAt . }}
     }}
@@ -267,8 +309,8 @@ def get_compliance_alerts() -> list[dict]:
             OPTIONAL {{ ?po :hasTotalOrderCost ?totalCost . }}
         }}
 
-        # Resolve the best available supplier
-        BIND(COALESCE(?supplier, ?perfSupplier, ?poSupplier) AS ?resolvedSupplier)
+        # Resolve the best available supplier (prioritizing direct links over material-supplies fallback)
+        BIND(COALESCE(?perfSupplier, ?poSupplier, ?supplier) AS ?resolvedSupplier)
         FILTER(BOUND(?resolvedSupplier))
         FILTER NOT EXISTS {{ ?resolvedSupplier rdf:type :AlternativeSupplier . }}
 
@@ -285,8 +327,10 @@ def get_compliance_alerts() -> list[dict]:
             {{ ?resolvedSupplier :hasSLA ?sla . }} UNION {{ ?sla :governs ?resolvedSupplier . }}
             OPTIONAL {{ ?sla :hasMissedItemPenaltyRate ?missedItemPenaltyRate . }}
             OPTIONAL {{ ?sla :hasQualityPenaltyRate ?qualityPenaltyRate . }}
+            OPTIONAL {{ ?sla :hasDelayPenaltyRate ?slaDelayPenaltyRate . }}
         }}
-        OPTIONAL {{ ?resolvedSupplier :penaltyRatePerDay ?delayPenaltyRate . }}
+        OPTIONAL {{ ?resolvedSupplier :penaltyRatePerDay ?supDelayPenaltyRate . }}
+        BIND(COALESCE(?slaDelayPenaltyRate, ?supDelayPenaltyRate) AS ?delayPenaltyRate)
         OPTIONAL {{ ?delivery :hasDelayDuration ?delayDuration . }}
         OPTIONAL {{ ?delivery :hasDeliveredQuantity ?deliveredQty . }}
     }}
@@ -356,15 +400,7 @@ def get_compliance_alerts() -> list[dict]:
                     assigned_violations.add(deliv)
                     break
                     
-        # C. Match any remaining violations of this supplier
-        if not matched_violation:
-            for deliv, v in unique_violations.items():
-                if deliv in assigned_violations:
-                    continue
-                if v.get("supplierName") == supplier_name:
-                    matched_violation = v
-                    assigned_violations.add(deliv)
-                    break
+
 
         # Calculate values based on match
         violation_status = matched_violation is not None
@@ -585,6 +621,12 @@ def assign_fallback_supplier(material_name: str, supplier_name: str, assignment_
     Also assumes the emergency shipment has been received, adding the alternative
     supplier's capacity to the material's current stock level.
     """
+    # Automatically put underscores in naming of material and supplier
+    if material_name:
+        material_name = material_name.strip().replace(" ", "_")
+    if supplier_name:
+        supplier_name = supplier_name.strip().replace(" ", "_")
+
     from knowledge_base.repository import CONTRACT_GRAPH
 
     mat_esc = material_name.replace('"', '\\"')
@@ -973,6 +1015,10 @@ def get_assembly_line_for_material(material_name: str):
     Check if a material already has an affectsProcess link in the Knowledge Graph.
     Returns the process label string if found, else None.
     """
+    # Automatically put underscores in naming of material
+    if material_name:
+        material_name = material_name.strip().replace(" ", "_")
+
     safe_mat = material_name.replace('"', '\\"')
     q = f"""
     {PREFIXES}
@@ -981,7 +1027,11 @@ def get_assembly_line_for_material(material_name: str):
         ?material rdf:type :RawMaterial .
         OPTIONAL {{ ?material rdfs:label ?mLabel . }}
         BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialName)
-        FILTER(LCASE(STR(?materialName)) = LCASE("{safe_mat}"))
+        FILTER(
+            LCASE(STR(?materialName)) = LCASE("{safe_mat}")
+            || LCASE(REPLACE(STR(?materialName), " ", "_")) = LCASE(REPLACE("{safe_mat}", " ", "_"))
+            || LCASE(REPLACE(STR(?materialName), "_", " ")) = LCASE(REPLACE("{safe_mat}", "_", " "))
+        )
         ?material :affectsProcess ?process .
         OPTIONAL {{ ?process rdfs:label ?pLabel . }}
         BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?processLabel)
@@ -994,20 +1044,49 @@ def get_assembly_line_for_material(material_name: str):
     return None
 
 
-def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
+def fire_new_material_alert(confirmed) -> str:
     """
     Insert a SystemAlert into the Knowledge Graph notifying the Production Manager
     of a new material that needs an assembly line assignment.
+    Stages all SLA contract properties on the alert node.
     Returns the alert_id created.
     """
     import hashlib, time as _time
     from datetime import datetime
+    
+    material_name = confirmed.material
+    supplier_name = confirmed.supplier_name
+    
     alert_id = "NEWMAT_" + hashlib.md5(f"{material_name}{supplier_name}{_time.time()}".encode()).hexdigest()[:8].upper()
     safe_mat = material_name.replace('"', '\\"')
     safe_sup = supplier_name.replace('"', '\\"')
     title = "New Material Requires Assembly Line Assignment"
     desc = f"Material '{safe_mat}' from supplier '{safe_sup}' has been added via SLA upload but has no linked assembly line. Please assign it to an existing production process."
     created_at = datetime.utcnow().isoformat() + "Z"
+    
+    # We escape the penalty clause and other text properties
+    safe_penalty = (confirmed.penalty_clause or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", "")
+    
+    # Build staged SLA properties triples
+    staged_triples = [
+        f':hasLeadTimeDays "{confirmed.lead_time_days}"^^xsd:integer',
+        f':hasPenaltyClause "{safe_penalty}"',
+        f':hasQuantity "{confirmed.quantity}"^^xsd:integer',
+        f':hasUnitCost "{confirmed.unit_cost}"^^xsd:float',
+        f':hasIsFallback "{"true" if confirmed.is_fallback else "false"}"^^xsd:boolean',
+    ]
+    
+    if confirmed.delay_penalty_rate is not None:
+        staged_triples.append(f':hasDelayPenaltyRate "{confirmed.delay_penalty_rate}"^^xsd:decimal')
+    if confirmed.missed_item_penalty_rate is not None:
+        staged_triples.append(f':hasMissedItemPenaltyRate "{confirmed.missed_item_penalty_rate}"^^xsd:decimal')
+    if confirmed.min_quality_threshold is not None:
+        staged_triples.append(f':hasMinimumQualityThreshold "{confirmed.min_quality_threshold}"^^xsd:decimal')
+    if confirmed.quality_penalty_rate is not None:
+        staged_triples.append(f':hasQualityPenaltyRate "{confirmed.quality_penalty_rate}"^^xsd:decimal')
+        
+    staged_triples_str = " ;\n                        ".join(staged_triples)
+
     q = f"""
     {PREFIXES}
     INSERT DATA {{
@@ -1021,7 +1100,8 @@ def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
                         :hasCategory "New Material" ;
                         :hasMaterialName "{safe_mat}" ;
                         :hasSupplierName "{safe_sup}" ;
-                        :createdAt "{created_at}"^^xsd:dateTime .
+                        :createdAt "{created_at}"^^xsd:dateTime ;
+                        {staged_triples_str} .
         }}
     }}
     """
@@ -1029,15 +1109,25 @@ def fire_new_material_alert(material_name: str, supplier_name: str) -> str:
     return alert_id
 
 
-def assign_material_to_process(material_name: str, process_name: str) -> dict:
+def assign_material_to_process(material_name: str, process_name: str, safety_stock: int | None = None, alert_id: str | None = None) -> dict:
     """
-    Create an :affectsProcess link between a material and an existing production process.
+    Create an :affectsProcess link between a material and an existing production process,
+    and optionally set its safety stock level.
+    If alert_id is provided, check if we need to activate a staged SLA contract.
+    If the assembly line is brand-new, register it as a :ProductionProcess with rdfs:label.
     """
+    # Automatically put underscores in naming of material and process (assembly line)
+    if material_name:
+        material_name = material_name.strip().replace(" ", "_")
+    if process_name:
+        process_name = process_name.strip().replace(" ", "_")
+
     safe_mat = material_name.replace('"', '\\"')
     safe_proc = process_name.replace('"', '\\"')
     mat_uri = _sanitize_uri_fragment(material_name)
     proc_uri = _sanitize_uri_fragment(process_name)
 
+    # 1. Lookup material and process to see if they already exist
     lookup_q = f"""
     {PREFIXES}
     SELECT ?mat ?proc WHERE {{
@@ -1056,16 +1146,184 @@ def assign_material_to_process(material_name: str, process_name: str) -> dict:
     """
     rows = graphdb.execute_sparql_select(lookup_q)
     mat_ref = f"<{rows[0]['mat']}>" if rows and rows[0].get("mat") else f":{mat_uri}"
-    proc_ref = f"<{rows[0]['proc']}>" if rows and rows[0].get("proc") else f":{proc_uri}"
+    
+    proc_exists = False
+    if rows and rows[0].get("proc"):
+        proc_ref = f"<{rows[0]['proc']}>"
+        proc_exists = True
+    else:
+        proc_ref = f":{proc_uri}"
+
+    # If the process doesn't exist, register it first as a production process
+    if not proc_exists:
+        insert_proc_q = f"""
+        {PREFIXES}
+        INSERT DATA {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                {proc_ref} rdf:type :ProductionProcess ;
+                          rdfs:label "{safe_proc}" .
+            }}
+        }}
+        """
+        graphdb.execute_sparql_update(insert_proc_q)
+        logger.info("Registered brand-new assembly line: %s with label '%s'", proc_ref, safe_proc)
+
+    # 2. Check for staged SLA properties on alert_id
+    if alert_id:
+        safe_alert_id = _sanitize_uri_fragment(alert_id)
+        q_staged = f"""
+        {PREFIXES}
+        SELECT ?supplierName ?materialName ?leadTimeDays ?penaltyClause ?quantity ?unit_cost ?isFallback ?delay_penalty_rate ?missed_item_penalty_rate ?min_quality_threshold ?quality_penalty_rate
+        WHERE {{
+            :{safe_alert_id} rdf:type :SystemAlert ;
+                             :hasSupplierName ?supplierName ;
+                             :hasMaterialName ?materialName .
+            OPTIONAL {{ :{safe_alert_id} :hasLeadTimeDays ?leadTimeDays . }}
+            OPTIONAL {{ :{safe_alert_id} :hasPenaltyClause ?penaltyClause . }}
+            OPTIONAL {{ :{safe_alert_id} :hasQuantity ?quantity . }}
+            OPTIONAL {{ :{safe_alert_id} :hasUnitCost ?unit_cost . }}
+            OPTIONAL {{ :{safe_alert_id} :hasIsFallback ?isFallback . }}
+            OPTIONAL {{ :{safe_alert_id} :hasDelayPenaltyRate ?delay_penalty_rate . }}
+            OPTIONAL {{ :{safe_alert_id} :hasMissedItemPenaltyRate ?missed_item_penalty_rate . }}
+            OPTIONAL {{ :{safe_alert_id} :hasMinimumQualityThreshold ?min_quality_threshold . }}
+            OPTIONAL {{ :{safe_alert_id} :hasQualityPenaltyRate ?quality_penalty_rate . }}
+        }}
+        LIMIT 1
+        """
+        staged_rows = graphdb.execute_sparql_select(q_staged)
+        if staged_rows:
+            staged_data = staged_rows[0]
+            supplier_name = staged_data.get("supplierName", "")
+            # use the staged material name if available, fallback to parameter
+            staged_mat_name = staged_data.get("materialName", material_name)
+            
+            try:
+                lead_time_days = int(staged_data.get("leadTimeDays", 1))
+            except (ValueError, TypeError):
+                lead_time_days = 1
+                
+            penalty_clause = staged_data.get("penaltyClause", "No penalties specified.")
+            
+            try:
+                quantity = int(staged_data.get("quantity", 0))
+            except (ValueError, TypeError):
+                quantity = 0
+                
+            try:
+                unit_cost = float(staged_data.get("unit_cost", 0.0))
+            except (ValueError, TypeError):
+                unit_cost = 0.0
+                
+            is_fallback = staged_data.get("isFallback") == "true" or staged_data.get("isFallback") is True
+            
+            def safe_float(v):
+                if v is None:
+                    return None
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return None
+                    
+            delay_penalty_rate = safe_float(staged_data.get("delay_penalty_rate"))
+            missed_item_penalty_rate = safe_float(staged_data.get("missed_item_penalty_rate"))
+            min_quality_threshold = safe_float(staged_data.get("min_quality_threshold"))
+            quality_penalty_rate = safe_float(staged_data.get("quality_penalty_rate"))
+            
+            from models.schemas import SLAContract
+            from knowledge_base.repository import create_contract_graph
+            
+            contract = SLAContract(
+                supplier_name=supplier_name,
+                material=staged_mat_name,
+                lead_time_days=lead_time_days,
+                penalty_clause=penalty_clause,
+                quantity=quantity,
+                unit_cost=unit_cost,
+                impacted_process=process_name,
+                is_fallback=is_fallback,
+                delay_penalty_rate=delay_penalty_rate,
+                missed_item_penalty_rate=missed_item_penalty_rate,
+                min_quality_threshold=min_quality_threshold,
+                quality_penalty_rate=quality_penalty_rate,
+            )
+            create_contract_graph(contract)
+            logger.info("Activated staged SLA contract for material '%s' and supplier '%s'", staged_mat_name, supplier_name)
+
+    # 3. Create the standard affectsProcess and safety stock triples
+    triples_to_insert = f"{mat_ref} :affectsProcess {proc_ref} ."
+    delete_q = ""
+
+    if safety_stock is not None:
+        triples_to_insert += f"\n            {mat_ref} :hasSafetyStockLevel \"{safety_stock}\"^^xsd:integer ."
+        delete_q = f"""
+        DELETE {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                {mat_ref} :hasSafetyStockLevel ?oldSafe .
+            }}
+        }}
+        WHERE {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                OPTIONAL {{ {mat_ref} :hasSafetyStockLevel ?oldSafe . }}
+            }}
+        }} ;
+        """
 
     insert_q = f"""
     {PREFIXES}
+    {delete_q}
     INSERT DATA {{
         GRAPH <{CONTRACT_GRAPH}> {{
-            {mat_ref} :affectsProcess {proc_ref} .
+            {triples_to_insert}
         }}
     }}
     """
     graphdb.execute_sparql_update(insert_q)
     invalidate_impacted_cache()
-    return {"status": "success", "material": material_name, "process": process_name}
+    return {"status": "success", "material": material_name, "process": process_name, "safety_stock": safety_stock}
+
+
+def create_fallback_request_alert(material_name: str, risk_percent: int) -> dict:
+    """
+    Creates a high/critical priority Fallback Supplier Request alert from Production Manager to Logistics Manager.
+    Severity is dependent on the risk percentage (depletion level of the raw material).
+    """
+    import hashlib, time as _time
+    from datetime import datetime
+    from knowledge_base.repository import CONTRACT_GRAPH
+
+    # Normalize material name (replacing spaces with underscores)
+    material_clean = material_name.strip().replace(" ", "_")
+
+    # Determine severity based on risk percentage
+    if risk_percent >= 75:
+        severity = "CRITICAL"
+    elif risk_percent >= 40:
+        severity = "HIGH"
+    else:
+        severity = "LOW"
+
+    alert_id = "FALLREQ_" + hashlib.md5(f"{material_clean}{risk_percent}{_time.time()}".encode()).hexdigest()[:8].upper()
+    title = f"Urgent Fallback Supplier Request: {material_clean}"
+    desc = f"Production Manager Omar Nasser has requested urgent fallback supplier activation for material '{material_clean}' (safety stock buffer depleted by {risk_percent}%). Please assign a fallback supplier immediately."
+    created_at = datetime.utcnow().isoformat() + "Z"
+
+    q = f"""
+    {PREFIXES}
+    INSERT DATA {{
+        GRAPH <{CONTRACT_GRAPH}> {{
+            :{alert_id} rdf:type :SystemAlert ;
+                       :hasTitle "{title}" ;
+                       :hasDesc "{desc}" ;
+                       :intendedFor "Logistics Manager, Production Manager" ;
+                       :hasStatus "UNREAD" ;
+                       :hasSeverity "{severity}" ;
+                       :hasCategory "Inventory" ;
+                       :hasMaterialName "{material_clean}" ;
+                       :createdAt "{created_at}" .
+        }}
+    }}
+    """
+    graphdb.execute_sparql_update(q)
+    logger.info("Created fallback request alert %s with severity %s for material %s", alert_id, severity, material_clean)
+    return {"status": "success", "alert_id": alert_id, "severity": severity, "risk_percent": risk_percent}
+

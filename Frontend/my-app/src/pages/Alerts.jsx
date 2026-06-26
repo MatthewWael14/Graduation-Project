@@ -25,9 +25,12 @@ function AlertDetailModal({ alert: a, onClose, onDismiss, onAssigned }) {
 
   const [assemblyLines, setAssemblyLines]       = useState([]);
   const [selectedProcess, setSelectedProcess]   = useState("");
+  const [safetyStock, setSafetyStock]           = useState("");
   const [assigning, setAssigning]               = useState(false);
   const [assignSuccess, setAssignSuccess]       = useState(false);
   const [assignError, setAssignError]           = useState("");
+  const [isNewProcess, setIsNewProcess]         = useState(false);
+  const [newProcessName, setNewProcessName]     = useState("");
 
   useEffect(() => {
     if (isNewMaterial) {
@@ -38,10 +41,19 @@ function AlertDetailModal({ alert: a, onClose, onDismiss, onAssigned }) {
   }, [isNewMaterial]);
 
   const handleAssign = async () => {
-    if (!selectedProcess) return;
+    const processToAssign = isNewProcess ? newProcessName.trim() : selectedProcess;
+    
+    if (!processToAssign) {
+      setAssignError(isNewProcess ? "Please enter a brand-new assembly line name." : "Please select an assembly line.");
+      return;
+    }
+    if (!safetyStock || parseInt(safetyStock, 10) <= 0) {
+      setAssignError("Please enter a valid positive safety stock level.");
+      return;
+    }
     setAssigning(true); setAssignError("");
     try {
-      await assignMaterialToProcess(a.materialName || a.desc, selectedProcess, a.id);
+      await assignMaterialToProcess(a.materialName || a.desc, processToAssign, a.id, safetyStock);
       setAssignSuccess(true);
       if (onAssigned) onAssigned(a.id);
     } catch (err) {
@@ -143,24 +155,70 @@ function AlertDetailModal({ alert: a, onClose, onDismiss, onAssigned }) {
                 <div style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>✅ Successfully assigned! The material is now linked to the selected assembly line.</div>
               ) : (
                 <>
-                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Select which assembly line this material belongs to:</div>
-                  <select
-                    value={selectedProcess}
-                    onChange={e => setSelectedProcess(e.target.value)}
-                    style={{ ...S.input, width: "100%", marginBottom: 10, background: C.bg, color: C.text }}
-                  >
-                    <option value="">-- Select Assembly Line --</option>
-                    {assemblyLines.map(line => (
-                      <option key={line} value={line}>{line.replace(/_/g, " ")}</option>
-                    ))}
-                  </select>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, color: C.muted }}>
+                      {isNewProcess ? "Enter brand-new assembly line name:" : "Select which assembly line this material belongs to:"}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsNewProcess(!isNewProcess);
+                        setAssignError("");
+                      }}
+                      style={{
+                        background: "none", border: "none",
+                        color: C.orange, fontSize: 11, fontWeight: 600,
+                        cursor: "pointer", textDecoration: "underline",
+                        padding: 0,
+                      }}
+                    >
+                      {isNewProcess ? "Select existing line" : "Create new line"}
+                    </button>
+                  </div>
+
+                  {isNewProcess ? (
+                    <input
+                      type="text"
+                      placeholder="e.g. EV Battery Pack Assembly Line"
+                      value={newProcessName}
+                      onChange={e => setNewProcessName(e.target.value)}
+                      style={{ ...S.input, width: "100%", marginBottom: 14, background: C.bg, color: C.text }}
+                    />
+                  ) : (
+                    <select
+                      value={selectedProcess}
+                      onChange={e => setSelectedProcess(e.target.value)}
+                      style={{ ...S.input, width: "100%", marginBottom: 14, background: C.bg, color: C.text }}
+                    >
+                      <option value="">-- Select Assembly Line --</option>
+                      {assemblyLines.map(line => (
+                        <option key={line} value={line}>{line.replace(/_/g, " ")}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Enter Safety Stock Level (units):</div>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 100"
+                    value={safetyStock}
+                    onChange={e => setSafetyStock(e.target.value)}
+                    style={{ ...S.input, width: "100%", marginBottom: 14, background: C.bg, color: C.text }}
+                  />
+
                   {assignError && <div style={{ color: C.red, fontSize: 12, marginBottom: 8 }}>{assignError}</div>}
                   <button
                     onClick={handleAssign}
-                    disabled={!selectedProcess || assigning}
-                    style={{ ...S.btn(), fontSize: 13, opacity: (!selectedProcess || assigning) ? 0.6 : 1, width: "100%" }}
+                    disabled={!(isNewProcess ? newProcessName.trim() : selectedProcess) || !safetyStock || assigning}
+                    style={{
+                      ...S.btn(),
+                      fontSize: 13,
+                      opacity: (!(isNewProcess ? newProcessName.trim() : selectedProcess) || !safetyStock || assigning) ? 0.6 : 1,
+                      width: "100%",
+                    }}
                   >
-                    {assigning ? "⚙ Assigning..." : "✓ Assign Assembly Line"}
+                    {assigning ? "⚙ Assigning..." : "✓ Assign Assembly Line & Safety Stock"}
                   </button>
                 </>
               )}

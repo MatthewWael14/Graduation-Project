@@ -20,6 +20,7 @@ from services.dashboard_service import (
     get_assembly_line_for_material,
     assign_material_to_process,
     update_alert_status,
+    create_fallback_request_alert,
 )
 from services.chat_service import run_chat_pipeline_async
 from pydantic import BaseModel
@@ -31,6 +32,10 @@ class FallbackAssignmentRequest(BaseModel):
 
 class AlertStatusUpdate(BaseModel):
     alert_id: str
+
+class FallbackRequest(BaseModel):
+    material: str
+    risk_percent: int
 
 logger = logging.getLogger(__name__)
 
@@ -129,18 +134,29 @@ class AssignMaterialRequest(BaseModel):
     material: str
     process: str
     alert_id: str | None = None
+    safety_stock: int | None = None
 
 
 @router.post("/assign-material-process")
 async def handle_assign_material_process(req: AssignMaterialRequest):
     """Assign a material to an assembly line and optionally mark the alert as read."""
     try:
-        result = assign_material_to_process(req.material, req.process)
+        result = assign_material_to_process(req.material, req.process, req.safety_stock, req.alert_id)
         if req.alert_id:
             update_alert_status(req.alert_id, "DISMISSED")
         return result
     except Exception as exc:
         logger.error("Failed to assign material to process: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/request-fallback")
+async def handle_request_fallback(req: FallbackRequest):
+    """Create an urgent fallback supplier request alert."""
+    try:
+        return create_fallback_request_alert(req.material, req.risk_percent)
+    except Exception as exc:
+        logger.error("Failed to create fallback request alert: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

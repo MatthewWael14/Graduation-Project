@@ -41,7 +41,7 @@ const buildKpiCards = (kpis) => [
   {
     label: "Total Penalties",
     value: kpis.total_penalty !== undefined
-      ? (kpis.total_penalty >= 1000 ? `$${(kpis.total_penalty / 1000).toFixed(0)}K` : `$${kpis.total_penalty}`)
+      ? (kpis.total_penalty >= 1000 ? `$${(kpis.total_penalty / 1000).toFixed(1).replace(/\.0$/, "")}K` : `$${kpis.total_penalty}`)
       : "—",
     change: "", up: false, color: C.red, icon: "💰",
   },

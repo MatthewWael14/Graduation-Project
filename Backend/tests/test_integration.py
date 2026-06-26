@@ -50,7 +50,7 @@ def test_model_imports():
     )
 
     # SLAContract
-    c = SLAContract(supplier_name="S1", material="M1", lead_time_days=3, penalty_clause="5%")
+    c = SLAContract(supplier_name="S1", material="M1", lead_time_days=3, penalty_clause="5%", quantity=100, unit_cost=5.0)
     check(c.supplier_name == "S1", "SLAContract instantiation")
 
     # ExtractedSLAData
@@ -74,6 +74,8 @@ def test_model_imports():
         material="M1",
         lead_time_days=3,
         penalty_clause="5%",
+        quantity=100,
+        unit_cost=5.0
     )
     check(cf.extraction_id == "EXT-001", "ConfirmedSLA instantiation")
     check(cf.corrections is None, "ConfirmedSLA corrections defaults to None")

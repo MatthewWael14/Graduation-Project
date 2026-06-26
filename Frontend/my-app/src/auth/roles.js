@@ -9,7 +9,7 @@ export const ROLE_PAGES = {
   admin:       ["dashboard","sla","inventory","suppliers","violations","ai","alerts"],
   logistics:   ["dashboard","inventory","suppliers","violations","alerts","ai"],
   procurement: ["dashboard","sla","violations","alerts","ai"],
-  production:  ["dashboard","violations","alerts","ai"],
+  production:  ["dashboard","inventory","violations","alerts","ai"],
 };
 
 export const ROLE_HOME = {

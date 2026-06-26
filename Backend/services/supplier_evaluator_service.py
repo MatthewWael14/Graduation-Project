@@ -261,17 +261,9 @@ def evaluate_and_update_suppliers(file_bytes: bytes, filename: str) -> dict:
         Avg_Lead_Time=("Lead Time Days", "mean")
     ).reset_index()
 
-    # 9. Normalise to 0-100 scale
-    min_score = supplier_agg["Raw_Score"].min()
-    max_score = supplier_agg["Raw_Score"].max()
+    # 9. Use raw score directly (remove min-max normalization)
+    supplier_agg["Normalized_Score"] = supplier_agg["Raw_Score"]
 
-    if max_score != min_score:
-        supplier_agg["Normalized_Score"] = 100 * (
-            (supplier_agg["Raw_Score"] - min_score) /
-            (max_score - min_score)
-        )
-    else:
-        supplier_agg["Normalized_Score"] = 100.0
 
     # 10. Supplier Tiering (A/B/C Classification)
     def calculate_tier(score):
@@ -418,8 +410,26 @@ def record_telemetry_transaction_and_update_score(delivery_id: str, delay_hours:
             OPTIONAL {{ ?delivery :maverickSpend ?maverickSpend . }}
         }}
         
-        # Link supplier (graph-agnostic ontology lookup)
-        {{ ?supplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?supplier . }}
+        # Resolve supplier using direct relationships first
+        OPTIONAL {{
+            GRAPH <http://example.org/contracts/> {{
+                ?delivery :isPerformedBy ?perfSupplier .
+            }}
+            FILTER NOT EXISTS {{ ?perfSupplier rdf:type :AlternativeSupplier . }}
+        }}
+        OPTIONAL {{
+            GRAPH <http://example.org/contracts/> {{
+                ?delivery :fulfills ?po .
+                ?po :issuedTo ?poSupplier .
+            }}
+            FILTER NOT EXISTS {{ ?poSupplier rdf:type :AlternativeSupplier . }}
+        }}
+        OPTIONAL {{
+            {{ ?suppliesSupplier :supplies ?material . }} UNION {{ ?material :isSuppliedBy ?suppliesSupplier . }}
+            FILTER NOT EXISTS {{ ?suppliesSupplier rdf:type :AlternativeSupplier . }}
+        }}
+        BIND(COALESCE(?perfSupplier, ?poSupplier, ?suppliesSupplier) AS ?supplier)
+        FILTER(BOUND(?supplier))
         OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
         OPTIONAL {{ ?supplier :hasName ?sName . }}
         BIND(COALESCE(?sLabel, ?sName) AS ?supplierName)
@@ -681,8 +691,10 @@ def record_placed_order_and_update_score(supplier_id: str, material_id: str, qua
         INSERT DATA {{
             GRAPH <http://example.org/contracts/> {{
                 :{po_id} rdf:type :PurchaseOrder ;
+                         :issuedTo :{clean_sup_id} ;
                          :hasOrderedQuantity {quantity} .
                 :{delivery_id} rdf:type :DeliveryEvent ;
+                              :isPerformedBy :{clean_sup_id} ;
                               :fulfills :{po_id} ;
                               :transports :{clean_mat_id} ;
                               :poType "{po_type}" ;

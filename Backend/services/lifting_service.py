@@ -194,9 +194,12 @@ class SemanticLifter:
         str
             A complete SPARQL INSERT DATA query ready to execute.
         """
+        supplier_name_clean = (data.supplier_name or "").strip().replace(" ", "_")
+        material_clean = (data.material or "").strip().replace(" ", "_")
+
         document_uri = _build_contract_id(data.document_id)
-        supplier_uri = _build_supplier_uri(data.supplier_id, data.supplier_name)
-        material_uri = _build_material_uri(data.material)
+        supplier_uri = _build_supplier_uri(data.supplier_id, supplier_name_clean)
+        material_uri = _build_material_uri(material_clean)
 
         lead_days = self._hours_to_days(data.sla_lead_time_hours)
 
@@ -213,12 +216,12 @@ INSERT DATA {{
 
         # ── Supplier ──
         :{supplier_uri}  rdf:type       :Supplier ;
-                         rdfs:label     "{_escape_sparql_literal(data.supplier_name)}" ;
+                         rdfs:label     "{_escape_sparql_literal(supplier_name_clean)}" ;
                          :hasReliabilityScore  "0.75"^^xsd:float .
 
         # ── Raw Material ──
         :{material_uri}  rdf:type       :RawMaterial ;
-                          rdfs:label     "{_escape_sparql_literal(data.material)}" .
+                          rdfs:label     "{_escape_sparql_literal(material_clean)}" .
 
         # ── Supplier supplies Material ──
         :{supplier_uri}  :supplies      :{material_uri} .
@@ -260,23 +263,42 @@ INSERT DATA {{
         financial fields.
         """
         lead_days = self._hours_to_days(data.sla_lead_time_hours)
-        penalty_clause = (
-            f"Delay penalty: ${data.delay_penalty_rate}/day. "
-            f"Missed item penalty: ${data.missed_item_penalty_rate}/unit. "
-            f"Quality penalty: {data.quality_penalty_rate * 100}% of order value."
-        )
         
+        # Keep positive numbers, zero or less becomes None
+        delay_penalty_rate = data.delay_penalty_rate if data.delay_penalty_rate > 0 else None
+        missed_item_penalty_rate = data.missed_item_penalty_rate if data.missed_item_penalty_rate > 0 else None
+        quality_penalty_rate = data.quality_penalty_rate if data.quality_penalty_rate > 0 else None
+        min_quality_threshold = data.minimum_quality_threshold if data.minimum_quality_threshold > 0 else None
+        quantity = data.quantity if data.quantity > 0 else 0
+        unit_cost = data.unit_cost if data.unit_cost > 0 else 0.0
+
+        clause_parts = []
+        if delay_penalty_rate is not None:
+            clause_parts.append(f"Delay penalty: ${delay_penalty_rate}/day.")
+        if missed_item_penalty_rate is not None:
+            clause_parts.append(f"Missed item penalty: ${missed_item_penalty_rate}/unit.")
+        if quality_penalty_rate is not None:
+            clause_parts.append(f"Quality penalty: {quality_penalty_rate * 100}% of order value.")
+        penalty_clause = " ".join(clause_parts) if clause_parts else "No penalties specified."
+        
+        supplier_name_clean = (data.supplier_name or "").strip().replace(" ", "_")
+        material_clean = (data.material or "").strip().replace(" ", "_")
+
         # Automatically look up process mapping for known materials
-        impacted_process = get_material_process(data.material)
+        impacted_process = get_material_process(material_clean)
 
         return SLAContract(
-            supplier_name=data.supplier_name,
-            material=data.material,
+            supplier_name=supplier_name_clean,
+            material=material_clean,
             lead_time_days=lead_days,
             penalty_clause=penalty_clause,
-            quantity=data.quantity,
-            unit_cost=data.unit_cost,
+            quantity=quantity,
+            unit_cost=unit_cost,
             impacted_process=impacted_process,
+            delay_penalty_rate=delay_penalty_rate,
+            missed_item_penalty_rate=missed_item_penalty_rate,
+            min_quality_threshold=min_quality_threshold,
+            quality_penalty_rate=quality_penalty_rate,
         )
 
     # ----------------------------------------------------------
@@ -314,6 +336,14 @@ INSERT DATA {{
             - ``extraction_id``: link back to the LLM extraction
             - ``triples_inserted``: always 1 (one batch insert)
         """
+        # ---- Automatically put underscores in naming of supplier, material, and process ----
+        if confirmed.supplier_name:
+            confirmed.supplier_name = confirmed.supplier_name.strip().replace(" ", "_")
+        if confirmed.material:
+            confirmed.material = confirmed.material.strip().replace(" ", "_")
+        if confirmed.impacted_process:
+            confirmed.impacted_process = confirmed.impacted_process.strip().replace(" ", "_")
+
         from services.dashboard_service import get_assembly_line_for_material, fire_new_material_alert
 
         # --- Auto-match or alert for assembly line ---
@@ -322,37 +352,47 @@ INSERT DATA {{
             resolved_process = get_assembly_line_for_material(confirmed.material)
         is_new_material = resolved_process is None
 
-        contract = SLAContract(
-            supplier_name=confirmed.supplier_name,
-            material=confirmed.material,
-            lead_time_days=confirmed.lead_time_days,
-            penalty_clause=confirmed.penalty_clause,
-            quantity=confirmed.quantity,
-            unit_cost=confirmed.unit_cost,
-            impacted_process=resolved_process,  # None if brand-new material
-        )
-
-        result = create_contract_graph(contract)
-
+        result = {}
         result["status"] = "success"
         result["extraction_id"] = confirmed.extraction_id
-        result["triples_inserted"] = 1
         result["auto_matched_process"] = resolved_process
         result["is_new_material"] = is_new_material
 
-        # If brand-new material, fire a Production Manager alert
         if is_new_material:
-            alert_id = fire_new_material_alert(confirmed.material, confirmed.supplier_name)
+            # Stage the SLA in a New Material alert; do NOT insert the SLA Contract triples yet!
+            alert_id = fire_new_material_alert(confirmed)
+            result["triples_inserted"] = 0
             result["new_material_alert_id"] = alert_id
-            logger.info("New material alert fired: %s for material '%s'", alert_id, confirmed.material)
+            result["staged"] = True
+            logger.info("New material SLA staged. Alert fired: %s for material '%s'", alert_id, confirmed.material)
+        else:
+            # Process matches an existing line, create and persist the contract graph immediately!
+            contract = SLAContract(
+                supplier_name=confirmed.supplier_name,
+                material=confirmed.material,
+                lead_time_days=confirmed.lead_time_days,
+                penalty_clause=confirmed.penalty_clause,
+                quantity=confirmed.quantity,
+                unit_cost=confirmed.unit_cost,
+                impacted_process=resolved_process,
+                is_fallback=confirmed.is_fallback,
+                delay_penalty_rate=confirmed.delay_penalty_rate,
+                missed_item_penalty_rate=confirmed.missed_item_penalty_rate,
+                min_quality_threshold=confirmed.min_quality_threshold,
+                quality_penalty_rate=confirmed.quality_penalty_rate,
+            )
+            res_graph = create_contract_graph(contract)
+            result.update(res_graph)
+            result["triples_inserted"] = 1
 
         if confirmed.corrections:
             result["reviewer_notes"] = confirmed.corrections
 
         logger.info(
-            "Persisted ConfirmedSLA(extraction=%s, supplier=%s).",
+            "Persisted ConfirmedSLA(extraction=%s, supplier=%s, staged=%s).",
             confirmed.extraction_id,
             confirmed.supplier_name,
+            is_new_material,
         )
         return result
 

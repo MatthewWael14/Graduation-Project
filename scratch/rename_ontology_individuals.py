@@ -29,7 +29,14 @@ XSD = rdflib.XSD
 # 1. Redundant/Unnecessary individuals to delete
 REDUNDANT = {
     "Supplier_LateTest", "SLA_LateTest", "PO_LateTest", "Del_LateTest",
-    "PO_Test", "Del_Test"
+    "PO_Test", "Del_Test", "SLA_Contract", "SLA_Gold", "SLA_101",
+    "Delivery_001", "Delivery_007", "Delivery_Quality_Test", "Delivery_Shortage",
+    "Shipment_001", "PO_100", "PO_200",
+    "SLA_VoltSupply_Standard", "SLA_EcoLithium_Premium", "SLA_AuraSteel_Standard",
+    "Delivery_VoltSupply_Main", "Delivery_AuraSteel_Delayed", "Delivery_EcoLithium_Quality",
+    "Delivery_VoltSupply_Shortage", "PO_VoltSupply_001", "PO_EcoLithium_001",
+    "Delivery_VoltSupply_Damaged", "Contract_Apex_Motor_Standard",
+    "Delivery_Apex_Delayed"
 }
 
 # 2. Renaming Map for remaining necessary individuals
@@ -127,6 +134,24 @@ def run():
             ignored_count += 1
             continue
 
+        # Filter out quality-related properties from Contract_VoltSupply_Standard
+        s_str = str(s_renamed)
+        p_str = str(p)
+        s_frag = s_str.split("#", 1)[1] if "#" in s_str else ""
+        p_frag = p_str.split("#", 1)[1] if "#" in p_str else p_str.split("/")[-1]
+        
+        if s_frag == "Contract_VoltSupply_Standard":
+            if p_frag in ("hasQualityPenaltyRate", "hasMinimumQualityThreshold"):
+                ignored_count += 1
+                continue
+            if p_frag == "penaltyClause" and "Quality Penalty" in str(o):
+                ignored_count += 1
+                continue
+
+        if s_frag == "SLA-002" and p_frag == "penaltyClause":
+            ignored_count += 1
+            continue
+
         if s_renamed != s:
             renamed_s_count += 1
 
@@ -151,36 +176,130 @@ def run():
     print(f"    - Renamed {renamed_s_count} subject URIs.")
     print(f"    - Renamed {renamed_o_count} object URIs.")
     print(f"    - Renamed {renamed_lit_count} literal values.")
-    # Ensure VoltSupply_Global has a reliability score of 0.85 and lead time of 14 days
+    # ----------------- CLEAN SEEDED CONTRACTS & VIOLATIONS -----------------
     v_uri = rdflib.URIRef("http://example.org/ontology#VoltSupply_Global")
-    g_new.add((v_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityScore"), rdflib.Literal(0.85, datatype=rdflib.XSD.float)))
-    g_new.add((v_uri, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(14, datatype=rdflib.XSD.integer)))
-    # Ensure Apex_Electronics has supplies, lead time of 10 days, and penalty rate of $400/day
+    au_uri = rdflib.URIRef("http://example.org/ontology#Aura_Steel_Co")
     a_uri = rdflib.URIRef("http://example.org/ontology#Apex_Electronics")
+    
     r_uri = rdflib.URIRef("http://example.org/ontology#Electric_Motor_Rotor")
-    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#supplies"), r_uri))
-    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(10, datatype=rdflib.XSD.integer)))
-    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#penaltyRatePerDay"), rdflib.Literal(400, datatype=rdflib.XSD.integer)))
-    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#penaltyClause"), rdflib.Literal("SLA Penalty: $400 per day after 2-day grace period")))
-
-    # Ensure Apex_Electronics also supplies Structural_Steel_Sheet to resolve Unknown supplier
     s_steel = rdflib.URIRef("http://example.org/ontology#Structural_Steel_Sheet")
+    battery_pack = rdflib.URIRef("http://example.org/ontology#Lithium_Ion_Battery_Pack")
+    mc_chip = rdflib.URIRef("http://example.org/ontology#Microcontroller_Chip")
+
+    # Add supplies relationship for Apex
+    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#supplies"), r_uri))
     g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#supplies"), s_steel))
 
-    # Create Delivery_Apex_Delayed to represent an active 5-day delay for Apex_Electronics
-    del_apex = rdflib.URIRef("http://example.org/ontology#Delivery_Apex_Delayed")
+    # Supplier reliability scores
+    g_new.add((v_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityScore"), rdflib.Literal(0.85, datatype=rdflib.XSD.float)))
+    g_new.add((v_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityTier"), rdflib.Literal("High")))
+    
+    g_new.add((au_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityScore"), rdflib.Literal(0.2, datatype=rdflib.XSD.float)))
+    g_new.add((au_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityTier"), rdflib.Literal("Low")))
+    
+    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityScore"), rdflib.Literal(0.6, datatype=rdflib.XSD.float)))
+    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#hasReliabilityTier"), rdflib.Literal("Medium")))
+
+    # Set Lithium Ion Battery Pack stock levels (stock=2000 > safetyStock=800)
+    g_new.add((battery_pack, rdflib.URIRef("http://example.org/ontology#hasInventoryStock"), rdflib.Literal(2000, datatype=rdflib.XSD.integer)))
+    g_new.add((battery_pack, rdflib.URIRef("http://example.org/ontology#hasSafetyStockLevel"), rdflib.Literal(800, datatype=rdflib.XSD.integer)))
+
+    # 1. VoltSupply Standard Contract (No Initial Violations)
+    vs_contract = rdflib.URIRef("http://example.org/ontology#Contract_VoltSupply_Standard")
+    g_new.add((vs_contract, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAContract")))
+    g_new.add((vs_contract, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#hasSupplier"), v_uri))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#governsMaterial"), battery_pack))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(14, datatype=rdflib.XSD.integer)))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#hasSLALeadTime"), rdflib.Literal(336, datatype=rdflib.XSD.integer)))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#penaltyClause"), rdflib.Literal("SLA Delay Penalty: $300 per day delayed")))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#hasDelayPenaltyRate"), rdflib.Literal(300, datatype=rdflib.XSD.decimal)))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(1000, datatype=rdflib.XSD.integer)))
+    g_new.add((vs_contract, rdflib.URIRef("http://example.org/ontology#hasUnitCost"), rdflib.Literal(150.0, datatype=rdflib.XSD.float)))
+    g_new.add((v_uri, rdflib.URIRef("http://example.org/ontology#hasSLA"), vs_contract))
+
+    # 2. Aura Steel Contract (Under-Shipment / Missed Item Violation)
+    as_contract = rdflib.URIRef("http://example.org/ontology#Contract_AuraSteel_Standard")
+    g_new.add((as_contract, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAContract")))
+    g_new.add((as_contract, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#hasSupplier"), au_uri))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#governsMaterial"), mc_chip))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(7, datatype=rdflib.XSD.integer)))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#hasSLALeadTime"), rdflib.Literal(168, datatype=rdflib.XSD.integer)))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#penaltyClause"), rdflib.Literal("SLA Missed Item Penalty: $50 per unit missed")))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#hasMissedItemPenaltyRate"), rdflib.Literal(50, datatype=rdflib.XSD.decimal)))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(2000, datatype=rdflib.XSD.integer)))
+    g_new.add((as_contract, rdflib.URIRef("http://example.org/ontology#hasUnitCost"), rdflib.Literal(15.0, datatype=rdflib.XSD.float)))
+    g_new.add((au_uri, rdflib.URIRef("http://example.org/ontology#hasSLA"), as_contract))
+    
+    # Active Under-Shipment Violation for Aura Steel
+    po_aura = rdflib.URIRef("http://example.org/ontology#PO_AuraSteel_001")
+    g_new.add((po_aura, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#PurchaseOrder")))
+    g_new.add((po_aura, rdflib.URIRef("http://example.org/ontology#issuedTo"), au_uri))
+    g_new.add((po_aura, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(2000, datatype=rdflib.XSD.integer)))
+
+    del_aura = rdflib.URIRef("http://example.org/ontology#Delivery_AuraSteel_Shortage")
+    g_new.add((del_aura, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#DeliveryEvent")))
+    g_new.add((del_aura, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAViolation")))
+    g_new.add((del_aura, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#transports"), mc_chip))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#fulfills"), po_aura))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#isPerformedBy"), au_uri))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#hasViolationType"), rdflib.Literal("UnderShipment")))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(2000, datatype=rdflib.XSD.integer)))
+    g_new.add((del_aura, rdflib.URIRef("http://example.org/ontology#hasDeliveredQuantity"), rdflib.Literal(1800, datatype=rdflib.XSD.integer)))
+
+    # 3. Apex Electronics Contracts (Damaged Goods Violation on Motor Rotor - SLA-002)
+    apex_contract1 = rdflib.URIRef("http://example.org/ontology#SLA-002")
+    g_new.add((apex_contract1, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAContract")))
+    g_new.add((apex_contract1, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasSupplier"), a_uri))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#governsMaterial"), r_uri))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(10, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasSLALeadTime"), rdflib.Literal(240, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#penaltyClause"), rdflib.Literal("SLA Quality Penalty: 15% of PO Cost for damaged goods")))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasQualityPenaltyRate"), rdflib.Literal(0.15, datatype=rdflib.XSD.decimal)))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasMinimumQualityThreshold"), rdflib.Literal(0.98, datatype=rdflib.XSD.decimal)))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(500, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract1, rdflib.URIRef("http://example.org/ontology#hasUnitCost"), rdflib.Literal(85.0, datatype=rdflib.XSD.float)))
+    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#hasSLA"), apex_contract1))
+    
+    apex_contract2 = rdflib.URIRef("http://example.org/ontology#Contract_Apex_Steel_Standard")
+    g_new.add((apex_contract2, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAContract")))
+    g_new.add((apex_contract2, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#hasSupplier"), a_uri))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#governsMaterial"), s_steel))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(10, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#hasSLALeadTime"), rdflib.Literal(240, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#penaltyClause"), rdflib.Literal("SLA Penalty: $400 per day after 2-day grace period")))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#hasDelayPenaltyRate"), rdflib.Literal(400, datatype=rdflib.XSD.decimal)))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(800, datatype=rdflib.XSD.integer)))
+    g_new.add((apex_contract2, rdflib.URIRef("http://example.org/ontology#hasUnitCost"), rdflib.Literal(45.0, datatype=rdflib.XSD.float)))
+    g_new.add((a_uri, rdflib.URIRef("http://example.org/ontology#hasSLA"), apex_contract2))
+
+    # Active Damaged Goods Violation for Apex (Electric Motor Rotor)
+    po_apex = rdflib.URIRef("http://example.org/ontology#PO_Apex_001")
+    g_new.add((po_apex, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#PurchaseOrder")))
+    g_new.add((po_apex, rdflib.URIRef("http://example.org/ontology#issuedTo"), a_uri))
+    g_new.add((po_apex, rdflib.URIRef("http://example.org/ontology#hasOrderedQuantity"), rdflib.Literal(500, datatype=rdflib.XSD.integer)))
+    g_new.add((po_apex, rdflib.URIRef("http://example.org/ontology#hasTotalOrderCost"), rdflib.Literal(42500.0, datatype=rdflib.XSD.float)))
+
+    del_apex = rdflib.URIRef("http://example.org/ontology#Delivery_Apex_Damaged")
     g_new.add((del_apex, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#DeliveryEvent")))
+    g_new.add((del_apex, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#SLAViolation")))
     g_new.add((del_apex, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
     g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#transports"), r_uri))
-    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#hasDeliveryStatus"), rdflib.Literal("Delayed")))
-    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#hasDelayDuration"), rdflib.Literal(120, datatype=rdflib.XSD.integer))) # 120 hours = 5 days delay
+    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#fulfills"), po_apex))
+    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#isPerformedBy"), a_uri))
+    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#hasViolationType"), rdflib.Literal("DamagedGoods")))
+    g_new.add((del_apex, rdflib.URIRef("http://example.org/ontology#hasTotalOrderCost"), rdflib.Literal(42500.0, datatype=rdflib.XSD.float)))
 
     # Add Alternative Supplier for Microcontroller_Chip (supplied by Aura_Steel_Co)
     alt_aura = rdflib.URIRef("http://example.org/ontology#Aura_Steel_Backup")
     g_new.add((alt_aura, rdflib.RDF.type, rdflib.URIRef("http://example.org/ontology#AlternativeSupplier")))
     g_new.add((alt_aura, rdflib.RDF.type, rdflib.OWL.NamedIndividual))
     g_new.add((alt_aura, rdflib.RDFS.label, rdflib.Literal("Aura Steel Backup")))
-    g_new.add((alt_aura, rdflib.URIRef("http://example.org/ontology#supplies"), rdflib.URIRef("http://example.org/ontology#Microcontroller_Chip")))
+    g_new.add((alt_aura, rdflib.URIRef("http://example.org/ontology#supplies"), mc_chip))
     g_new.add((alt_aura, rdflib.URIRef("http://example.org/ontology#hasReliabilityScore"), rdflib.Literal(0.88, datatype=rdflib.XSD.float)))
     g_new.add((alt_aura, rdflib.URIRef("http://example.org/ontology#leadTimeDays"), rdflib.Literal(4, datatype=rdflib.XSD.integer)))
     g_new.add((alt_aura, rdflib.URIRef("http://example.org/ontology#country"), rdflib.Literal("DE")))
@@ -261,9 +380,82 @@ def run():
     # 4. Clear and populate GraphDB
     print("[*] Connecting to GraphDB to reload database...")
     try:
-        # Clear all graphs (including default/unnamed graph)
-        print("    -> Clearing all graphs (CLEAR ALL) ...")
-        graphdb.execute_sparql_update("CLEAR ALL")
+        # Fetch existing triples in CONTRACT_GRAPH to preserve them
+        existing_triples = []
+        try:
+            print(f"    -> Fetching existing triples from CONTRACT_GRAPH ({CONTRACT_GRAPH}) to preserve runtime data...")
+            q_exist = f"""
+            SELECT ?s ?p ?o (isURI(?o) AS ?o_uri) (datatype(?o) AS ?o_type) WHERE {{
+                GRAPH <{CONTRACT_GRAPH}> {{
+                    ?s ?p ?o .
+                }}
+            }}
+            """
+            rows = graphdb.execute_sparql_select(q_exist)
+            for r in rows:
+                s_val = r['s']
+                o_val = r['o']
+                p_val = r['p']
+                o_uri = r.get('o_uri') == 'true' or r.get('o_uri') is True
+                
+                s_frag = s_val.split("#", 1)[1] if "#" in s_val else ""
+                o_frag = o_val.split("#", 1)[1] if ("#" in o_val and o_uri) else ""
+                p_frag = p_val.split("#", 1)[1] if "#" in p_val else ""
+                
+                if s_frag in REDUNDANT or o_frag in REDUNDANT:
+                    continue
+
+                # Filter out quality-related properties from Contract_VoltSupply_Standard
+                if s_frag == "Contract_VoltSupply_Standard":
+                    if p_frag in ("hasQualityPenaltyRate", "hasMinimumQualityThreshold"):
+                        continue
+                    if p_frag == "penaltyClause" and "Quality Penalty" in str(o_val):
+                        continue
+
+                # Filter out old penaltyClause from SLA-002
+                if s_frag == "SLA-002" and p_frag == "penaltyClause":
+                    continue
+
+                s_str = f"<{s_val}>"
+                p_str = f"<{p_val}>"
+                o_type = r.get('o_type')
+                if o_uri:
+                    o_str = f"<{o_val}>"
+                else:
+                    o_escaped = o_val.replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                    if o_type:
+                        o_str = f'"{o_escaped}"^^<{o_type}>'
+                    else:
+                        o_str = f'"{o_escaped}"'
+                existing_triples.append(f"{s_str} {p_str} {o_str} .")
+            print(f"    -> Found {len(existing_triples)} existing triples to preserve (excluding redundant items).")
+        except Exception as e_fetch:
+            print(f"    [!] Failed to fetch existing triples: {e_fetch}")
+
+        # Deduplicate supplier reliability scores (keep the runtime simulator-updated score)
+        suppliers_with_existing_score = set()
+        for t in existing_triples:
+            if "hasReliabilityScore" in t:
+                parts = t.split(None, 2)
+                if len(parts) >= 3:
+                    suppliers_with_existing_score.add(parts[0])
+
+        filtered_instance_lines = []
+        for line in instance_lines:
+            if "hasReliabilityScore" in line:
+                parts = line.split(None, 2)
+                if len(parts) >= 3 and parts[0] in suppliers_with_existing_score:
+                    continue
+            filtered_instance_lines.append(line)
+
+        # Combine generated instances with existing ones, removing duplicates
+        combined_instances = list(set(filtered_instance_lines) | set(existing_triples))
+        print(f"    -> Combined into {len(combined_instances)} total instance triples (seed + current system state).")
+
+        # Clear only ONTOLOGY_GRAPH and CONTRACT_GRAPH instead of CLEAR ALL
+        print(f"    -> Clearing ONTOLOGY_GRAPH ({ONTOLOGY_GRAPH}) and CONTRACT_GRAPH ({CONTRACT_GRAPH}) ...")
+        graphdb.execute_sparql_update(f"CLEAR GRAPH <{ONTOLOGY_GRAPH}>")
+        graphdb.execute_sparql_update(f"CLEAR GRAPH <{CONTRACT_GRAPH}>")
 
         # Batch load Schema lines into ONTOLOGY_GRAPH
         print(f"    -> Loading Schema triples into {ONTOLOGY_GRAPH}...")
@@ -277,11 +469,11 @@ def run():
         
         # Batch load Instance lines into CONTRACT_GRAPH
         print(f"\n    -> Loading Instance triples into {CONTRACT_GRAPH}...")
-        for i in range(0, len(instance_lines), batch_size):
-            batch = instance_lines[i : i + batch_size]
+        for i in range(0, len(combined_instances), batch_size):
+            batch = combined_instances[i : i + batch_size]
             sparql_insert = f"INSERT DATA {{ GRAPH <{CONTRACT_GRAPH}> {{ {' '.join(batch)} }} }}"
             graphdb.execute_sparql_update(sparql_insert)
-            sys.stdout.write(f"\r       Loaded {min(i + batch_size, len(instance_lines))} / {len(instance_lines)} instance triples...")
+            sys.stdout.write(f"\r       Loaded {min(i + batch_size, len(combined_instances))} / {len(combined_instances)} instance triples...")
             sys.stdout.flush()
 
         print("\n[+] SUCCESS! GraphDB re-seeded successfully with clean, renamed presentation data.")

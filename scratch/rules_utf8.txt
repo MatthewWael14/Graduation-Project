@@ -1,0 +1,79 @@
+======================================================================
+  SWRL RULES IN ONTOLOGY
+======================================================================
+
+Rule #1: PenaltyDelay
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(Nbec2dfb8e62c4f989c86c5a645a24846) ^ fulfills(http://example.org/ontology/d, http://example.org/ontology/po) ^ issuedTo(http://example.org/ontology/po, http://example.org/ontology/sup) ^ governs(http://example.org/ontology/sla, http://example.org/ontology/sup) ^ UnknownAtomType(N7a4d4dc01f7e40648b4ad1c4c69b3676) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(N834c0717e34746c1bcc8cea362d10656) ^ multiply(http://example.org/ontology/penalty, http://example.org/ontology/days, http://example.org/ontology/rate)
+  HEAD: UnknownAtomType(Nfeaf6ab2220a4290afbcc4ad9d5e54e6)
+
+Rule #2: SLADelayConfirmedCarrier
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Nf4c708f8a8384e70ad2443cf2c319ccd) ^ UnknownAtomType(N236e8f21f5234c0094f7667e50591153) ^ greaterThan(http://example.org/ontology/actual, http://example.org/ontology/planned) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(N10b257b8af444646881ebd5106c7402c)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(N3e00e75dd6af412da2457d31b3be556f) ^ UnknownAtomType(Nfea8a3809aeb468fae936e0278c4ca45)
+
+Rule #3: Replaces
+  BODY: IncumbentSupplier(http://example.org/ontology/inc) ^ supplies(http://example.org/ontology/inc, http://example.org/ontology/m) ^ AlternativeSupplier(http://example.org/ontology/alt) ^ supplies(http://example.org/ontology/alt, http://example.org/ontology/m)
+  HEAD: replaces(http://example.org/ontology/alt, http://example.org/ontology/inc)
+
+Rule #4: MissedItemViolations
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Ndaa56215bbb346f88c81d5ed959f1c56) ^ fulfills(http://example.org/ontology/d, http://example.org/ontology/po) ^ UnknownAtomType(N964a196087f34e4da60785203d9de530) ^ lessThan(http://example.org/ontology/delivered, http://example.org/ontology/ordered)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(N8ee38f51bb9d4a08b4fff08b1411fd07) ^ UnknownAtomType(N16d114e2bfd141669fb1b5b53b39615a)
+
+Rule #5: InventoryRiskNoDelay
+  BODY: RawMaterial(http://example.org/ontology/m) ^ UnknownAtomType(Nf771c01072e840efa4660af8cc8923cf) ^ UnknownAtomType(N2facc895999a49eb8a5e0574470a82f5) ^ lessThan(http://example.org/ontology/stock, http://example.org/ontology/safe) ^ affectsProcess(http://example.org/ontology/m, http://example.org/ontology/p)
+  HEAD: UnknownAtomType(N7e2befa8d00641c39099890f984f0bfa)
+
+Rule #6: ProductionDisruptionCriticalImpact
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(N5a4ba208001c4e7f8245c5cfcfbce7d8) ^ transports(http://example.org/ontology/d, http://example.org/ontology/m) ^ affectsProcess(http://example.org/ontology/m, http://example.org/ontology/p) ^ UnknownAtomType(N0ae0c559fa2e4a5f911b5394be3bf738) ^ UnknownAtomType(N4e8ef8aae40941f0ac882a7b0430671a) ^ lessThan(http://example.org/ontology/stock, http://example.org/ontology/safe) ^ UnknownAtomType(N7a464e67ed1c4b4586e5905a2bc424f5)
+  HEAD: ProductionDisruption(http://example.org/ontology/p) ^ UnknownAtomType(N2a2ddc99afce40a3bd3662a40c521403) ^ UnknownAtomType(N460be84f132446879abb2933b10d1f5d)
+
+Rule #7: PenaltyMissedItem
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(N9f10b65543ab447f9737537b723052f1) ^ fulfills(http://example.org/ontology/d, http://example.org/ontology/po) ^ UnknownAtomType(Naa3ff7b5c95849d5922360c676825773) ^ UnknownAtomType(Nabca0c474d654934a8e827903329c018) ^ issuedTo(http://example.org/ontology/po, http://example.org/ontology/sup) ^ governs(http://example.org/ontology/sla, http://example.org/ontology/sup) ^ UnknownAtomType(N6bdd8983a43e499c8c584ef0cbd6b098) ^ subtract(http://example.org/ontology/missed, http://example.org/ontology/ordered, http://example.org/ontology/delivered) ^ multiply(http://example.org/ontology/penalty, http://example.org/ontology/missed, http://example.org/ontology/rate)
+  HEAD: UnknownAtomType(N12ac747bccfc40f6bc3e80123adc98d7)
+
+Rule #8: ReliabilityMedium
+  BODY: Supplier(http://example.org/ontology/s) ^ UnknownAtomType(Na9772648d19c41f8944f0fcd20e5a580) ^ greaterThanOrEqual(http://example.org/ontology/score, 0.5) ^ lessThan(http://example.org/ontology/score, 0.8)
+  HEAD: UnknownAtomType(N873f66e78d6e43c7837c91daf954ed2b)
+
+Rule #9: PenaltyQuality
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(Nee6cf72fe587479ea77bd82ebb3d89d4) ^ fulfills(http://example.org/ontology/d, http://example.org/ontology/po) ^ UnknownAtomType(Nd3a2b6ef8f56476a81de42a235ab2cdb) ^ issuedTo(http://example.org/ontology/po, http://example.org/ontology/sup) ^ governs(http://example.org/ontology/sla, http://example.org/ontology/sup) ^ UnknownAtomType(N352bbc19e98c4a97b32aa03a499cd12f) ^ multiply(http://example.org/ontology/penalty, http://example.org/ontology/cost, http://example.org/ontology/rate)
+  HEAD: UnknownAtomType(Nfbc6ec18383343e2ba2de01395bd6524)
+
+Rule #10: ReliabilityHigh
+  BODY: Supplier(http://example.org/ontology/s) ^ UnknownAtomType(Nd46fc60b44674015971b415d871f3b73) ^ greaterThanOrEqual(http://example.org/ontology/score, 0.8)
+  HEAD: UnknownAtomType(Ncc80648527cf4374a9e16be292bac10a)
+
+Rule #11: QualityViolations
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Nbc8d45e80fd949cb9922cf052534ee31) ^ fulfills(http://example.org/ontology/d, http://example.org/ontology/po) ^ issuedTo(http://example.org/ontology/po, http://example.org/ontology/sup) ^ governs(http://example.org/ontology/sla, http://example.org/ontology/sup) ^ UnknownAtomType(Nd309c6e980c34ab29134cef5448e27cb) ^ lessThan(http://example.org/ontology/score, http://example.org/ontology/min)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(N68f9d5fc63d6415ca9fab374414f1e13) ^ UnknownAtomType(N85c4b229093d4ac48bcc7cd45a6d7bab)
+
+Rule #12: RecommendationQualifier
+  BODY: AlternativeSupplier(http://example.org/ontology/alt) ^ replaces(http://example.org/ontology/alt, http://example.org/ontology/inc) ^ UnknownAtomType(N728fb7bbfa874296a6e62c8ff770dc0d)
+  HEAD: UnknownAtomType(Nc16b0bedb25c491d8886319f54b39305)
+
+Rule #13: SLADelayPredictionCustoms
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(N1297863f5f084c94a369d1c11163f1f6) ^ transports(http://example.org/ontology/d, http://example.org/ontology/mat) ^ isSuppliedBy(http://example.org/ontology/mat, http://example.org/ontology/sup) ^ hasSLA(http://example.org/ontology/sup, http://example.org/ontology/sla) ^ UnknownAtomType(N1a8d1abb30a747a6bd4170b5c244f8c6) ^ greaterThan(http://example.org/ontology/predTime, http://example.org/ontology/agreedTime) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(N4d282a4a1b904576a23d6761245d9bd9)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(Ne679c7849575446abb2b952d85bc6cb3) ^ UnknownAtomType(N4c0f31a81af74431b230dba5d5938ef2)
+
+Rule #14: TransportDelay
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Nbaaa59853d0544c599ab3c5193689189) ^ UnknownAtomType(N1f42be3524634e2f8ae6b1c10e24d295) ^ lessThanOrEqual(http://example.org/ontology/actDep, http://example.org/ontology/planDep) ^ UnknownAtomType(Nea7bc5b2df8146a4b1676d3290667480) ^ UnknownAtomType(Nc553fe6f08654f908f789acd6220a819) ^ greaterThan(http://example.org/ontology/actArr, http://example.org/ontology/planArr)
+  HEAD: DelayEvent(http://example.org/ontology/d) ^ UnknownAtomType(Nfd609667e7024a51af292331cde840d6)
+
+Rule #15: ProductionDisruptionStandardImpact
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Ne5bf8835c4914ee4bdcc0b510351c4fc) ^ transports(http://example.org/ontology/d, http://example.org/ontology/m) ^ affectsProcess(http://example.org/ontology/m, http://example.org/ontology/p) ^ UnknownAtomType(N760e363f64474956840038fc094e9b61) ^ UnknownAtomType(Ncd3d1ae647ac498596d5f536e97e6cbf) ^ lessThan(http://example.org/ontology/stock, http://example.org/ontology/safe) ^ UnknownAtomType(N32e53dc97a744e8c86362453e12963ca)
+  HEAD: ProductionDisruption(http://example.org/ontology/p) ^ UnknownAtomType(N9cd57fe1c20843dd97f3b6da5e828a35) ^ UnknownAtomType(N54dbe11c07f04dfc94bb048c49ad81c9)
+
+Rule #16: ReliabilityLow
+  BODY: Supplier(http://example.org/ontology/s) ^ UnknownAtomType(Nd8112cca54e144d3aabf1cfbf87d47f7) ^ lessThan(http://example.org/ontology/score, 0.5)
+  HEAD: UnknownAtomType(Nbf3ec14c2a9147ccadd88ac1b617fed7)
+
+Rule #17: SLADelayPredictionCarrier
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(Ndb860ad48167449a8804f9f32e2cef22) ^ transports(http://example.org/ontology/d, http://example.org/ontology/mat) ^ isSuppliedBy(http://example.org/ontology/mat, http://example.org/ontology/sup) ^ hasSLA(http://example.org/ontology/sup, http://example.org/ontology/sla) ^ UnknownAtomType(N3d5e4a1ebe6343f3b7cf720823595ac7) ^ greaterThan(http://example.org/ontology/predTime, http://example.org/ontology/agreedTime) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(N571c32724daf4ff1b52921aeb5249bea)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(N280fb7b650a64217b0a0dd7af24d0605) ^ UnknownAtomType(N1bf02babf1084e4e979f76d5e455d548)
+
+Rule #18: DowntimeCalculation
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(N4c6e3b1020614ddaa510d907930aae99) ^ transports(http://example.org/ontology/d, http://example.org/ontology/m) ^ affectsProcess(http://example.org/ontology/m, http://example.org/ontology/p) ^ UnknownAtomType(N3888023bd1e24384a69618ff6f400e30) ^ UnknownAtomType(Ne702251250864b1986da7389e16cd3c5) ^ lessThan(http://example.org/ontology/stock, http://example.org/ontology/safe) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(Nd634c407bcee4f06ade0d6c603f30bf3)
+  HEAD: UnknownAtomType(N883675ef0b47454a844c65865c5155e1)
+
+Rule #19: SLADelayConfirmedCustoms
+  BODY: DeliveryEvent(http://example.org/ontology/d) ^ UnknownAtomType(N5c0dc53351fb4a6f8e38c24a0f30b61b) ^ UnknownAtomType(N48374f7720d5489bae2dfb53c8caf110) ^ greaterThan(http://example.org/ontology/actual, http://example.org/ontology/planned) ^ isTriggeredBy(http://example.org/ontology/delayEvent, http://example.org/ontology/d) ^ UnknownAtomType(Na8e4df87cf654d8d91655aa5690b4cf2)
+  HEAD: SLAViolation(http://example.org/ontology/d) ^ UnknownAtomType(Ne3d3d1091801415e9edeeaac2aef910c) ^ UnknownAtomType(N8ac0d715e43b4971bdabdd9e47280937)

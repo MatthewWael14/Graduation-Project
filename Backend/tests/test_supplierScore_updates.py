@@ -24,23 +24,28 @@ def test_flow():
     print("  TESTING EVENT-DRIVEN SUPPLIER SCORE UPDATES (OPTION 3)")
     print("=" * 60)
     
-    # 1. Reset baseline scores by re-running the seeder
-    print("[1] Seeding baseline scores...")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    seeder_path = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "Machine_Learning", "Procurement_Model", "seed_procurement_evaluation.py")
-    os.system(f"python {seeder_path}")
+    # 1. Reset baseline score for VoltSupply_Global to 0.85
+    print("[1] Resetting baseline score for VoltSupply_Global to 0.85...")
     
-    score_initial = get_reliability_score("Supplier_SUP_001")
-    print(f"    - Initial Seed Score for Supplier_SUP_001: {score_initial}")
+    # Reset VoltSupply_Global score to 0.85 first to ensure standard starting point
+    graphdb.execute_sparql_update(f"""{PREFIXES}
+        DELETE WHERE {{ :VoltSupply_Global :hasReliabilityScore ?o }}
+    """)
+    graphdb.execute_sparql_update(f"""{PREFIXES}
+        INSERT DATA {{ :VoltSupply_Global :hasReliabilityScore 0.85 }}
+    """)
+    
+    score_initial = get_reliability_score("VoltSupply_Global")
+    print(f"    - Initial Score for VoltSupply_Global: {score_initial}")
     
     # 2. Place a new order
     print("\n[2] Placing a new Purchase Order...")
     url_place = "http://localhost:8001/api/sandbox/place-order"
     payload_place = {
-        "supplier_id": "Supplier_SUP_001",
-        "material_id": "Material_Steel_Sheet__kg_",
-        "quantity": 500,
-        "unit_price": 6.55,
+        "supplier_id": "VoltSupply_Global",
+        "material_id": "Lithium_Ion_Battery_Pack",
+        "quantity": 1000,
+        "unit_price": 150.0,
         "po_date": "2026-03-05",
         "po_type": "Standard",
         "department": "Operations"
@@ -54,8 +59,8 @@ def test_flow():
     delivery_id = data_place["delivery_id"]
     print(f"    - Successfully placed order. Generated Delivery ID: {delivery_id}")
     
-    score_after_place = get_reliability_score("Supplier_SUP_001")
-    print(f"    - Score for Supplier_SUP_001 after placing PO: {score_after_place}")
+    score_after_place = get_reliability_score("VoltSupply_Global")
+    print(f"    - Score for VoltSupply_Global after placing PO: {score_after_place}")
     
     # 3. Simulate an IoT delay for this specific Delivery ID
     print(f"\n[3] Simulating IoT Telemetry Delay for {delivery_id}...")
@@ -78,8 +83,8 @@ def test_flow():
     print("    - Waiting 10 seconds for background recalculation to complete...")
     time.sleep(10)
     
-    score_after_delay = get_reliability_score("Supplier_SUP_001")
-    print(f"    - Score for Supplier_SUP_001 after 96h Delay: {score_after_delay}")
+    score_after_delay = get_reliability_score("VoltSupply_Global")
+    print(f"    - Score for VoltSupply_Global after 96h Delay: {score_after_delay}")
     
     print("\n" + "=" * 60)
     if score_after_delay is not None and score_after_delay < score_after_place:

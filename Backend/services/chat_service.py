@@ -275,7 +275,12 @@ SELECT (SUM(?penalty) AS ?totalPenalty) WHERE {
         FILTER(BOUND(?sla))
         ?sla :hasQualityPenaltyRate ?qualityPenaltyRate .
     }
-    OPTIONAL { ?supplier :penaltyRatePerDay ?delayPenaltyRate . }
+    OPTIONAL {
+        FILTER(BOUND(?sla))
+        ?sla :hasDelayPenaltyRate ?slaDelayPenaltyRate .
+    }
+    OPTIONAL { ?supplier :penaltyRatePerDay ?supDelayPenaltyRate . }
+    BIND(COALESCE(?slaDelayPenaltyRate, ?supDelayPenaltyRate) AS ?delayPenaltyRate)
     
     BIND(
         IF(STR(?violationType) = "LateDelivery",

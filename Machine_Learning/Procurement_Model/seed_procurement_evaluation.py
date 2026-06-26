@@ -53,6 +53,16 @@ def seed_procurement_eval_data():
     print(f"[*] Loading dataset from: {DATASET_PATH}...")
     df = pd.read_csv(DATASET_PATH)
     
+    # Exclude dummy/evaluation suppliers to prevent them from ever being added again
+    banned_suppliers = {
+        "TechPro Components", "Cornerstone Services", "Quantum Electronics", 
+        "Nordic Office Solutions", "Blue Horizon Packaging", "Iron Gate Steel", 
+        "GlobalParts Ltd", "Atlantic Raw Materials", "Meridian Tech", 
+        "Apex Industrial Supplies", "EuroBuild Materials", "SunRise Manufacturing", 
+        "FastTrack Logistics", "Pacific Rim Supplies", "Delta Engineering"
+    }
+    df = df[~df["Supplier Name"].isin(banned_suppliers)]
+    
     # 80/20 split to isolate the 20% test partition (random_state=42 matches training)
     print("[*] Performing 80/20 train-test split...")
     _, eval_df = train_test_split(df, test_size=0.2, random_state=42)
@@ -66,6 +76,7 @@ def seed_procurement_eval_data():
     print(f"[+] Found {len(unique_suppliers)} unique suppliers in the evaluation set to seed.")
 
     triples = []
+    unique_suppliers_uris = []
     
     for idx, row in unique_suppliers.iterrows():
         sup_name = escape_literal(row["Supplier Name"])
@@ -98,6 +109,8 @@ def seed_procurement_eval_data():
         local_intl = escape_literal(row["Local International"])
         currency = escape_literal(row["Currency"])
         po_type = escape_literal(row["PO Type"])
+
+        unique_suppliers_uris.append(f":{sup_uri}")
 
         # Format penalty clause text
         penalty_clause = f"SLA Penalty terms: Delay penalty daily. Maverick spend limit enforcement. Savings target: {savings}%."
@@ -143,23 +156,28 @@ def seed_procurement_eval_data():
         """)
 
     # Combine into a SPARQL update query
-    delete_query = f"""{PREFIXES}
-    DELETE {{
-        GRAPH <{CONTRACT_GRAPH}> {{
-            ?s :hasReliabilityScore ?o .
-        }}
-        ?s :hasReliabilityScore ?o .
-    }}
-    WHERE {{
-        {{
+    # Targeted delete query using VALUES to only clear scores for suppliers being seeded, keeping other data intact
+    if unique_suppliers_uris:
+        delete_query = f"""{PREFIXES}
+        DELETE {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 ?s :hasReliabilityScore ?o .
             }}
-        }} UNION {{
             ?s :hasReliabilityScore ?o .
         }}
-    }}
-    """
+        WHERE {{
+            VALUES ?s {{ {" ".join(unique_suppliers_uris)} }}
+            {{
+                GRAPH <{CONTRACT_GRAPH}> {{
+                    ?s :hasReliabilityScore ?o .
+                }}
+            }} UNION {{
+                ?s :hasReliabilityScore ?o .
+            }}
+        }}
+        """
+    else:
+        delete_query = ""
 
     sparql_update = f"""{PREFIXES}
     INSERT DATA {{
@@ -172,7 +190,8 @@ def seed_procurement_eval_data():
     print("[*] Connecting to GraphDB to insert evaluation supplier triples...")
     try:
         # Clear old scores first to avoid duplicates
-        graphdb.execute_sparql_update(delete_query)
+        if delete_query:
+            graphdb.execute_sparql_update(delete_query)
         graphdb.execute_sparql_update(sparql_update)
         print(f"[+] GraphDB successfully seeded with {len(unique_suppliers)} new suppliers and their logistics parameters.")
     except Exception as exc:

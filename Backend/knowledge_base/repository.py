@@ -82,6 +82,13 @@ def create_contract_graph(contract: SLAContract) -> dict:
     dict
         A confirmation dict with the supplier and material names.
     """
+    # ---- Automatically put underscores in naming of supplier, material, and process ----
+    if contract.supplier_name:
+        contract.supplier_name = contract.supplier_name.strip().replace(" ", "_")
+    if contract.material:
+        contract.material = contract.material.strip().replace(" ", "_")
+    if contract.impacted_process:
+        contract.impacted_process = contract.impacted_process.strip().replace(" ", "_")
 
     # ---- Build safe URI fragments ----
     supplier_uri = _sanitize_uri_fragment(contract.supplier_name)
@@ -118,18 +125,64 @@ def create_contract_graph(contract: SLAContract) -> dict:
         }}"""
 
     timestamp = datetime.utcnow().isoformat() + "Z"
+    supplier_type = ":AlternativeSupplier" if contract.is_fallback else ":Supplier"
+
+    # ---- Build dynamic insert triples ----
+    material_props = [
+        f'rdfs:label     "{safe_material}"',
+        f':hasUnitCost   "{contract.unit_cost}"^^xsd:float',
+        f':hasOrderedQuantity "{contract.quantity}"^^xsd:integer'
+    ]
+    
+    material_triples_str = f"             :{material_uri}  rdf:type       :RawMaterial ;\n                              " + " ;\n                              ".join(material_props) + " ."
+    if process_triple:
+        material_triples_str += process_triple
+
+    supplier_props = [
+        f'rdf:type       {supplier_type}',
+        f'rdfs:label     "{safe_supplier_name}"',
+        f':createdAt     "{timestamp}"^^xsd:dateTime',
+        f':hasSLA             :{contract_uri}'
+    ]
+    if contract.delay_penalty_rate is not None:
+        supplier_props.append(f':penaltyRatePerDay  "{contract.delay_penalty_rate}"^^xsd:decimal')
+
+    supplier_triples_str = f"             :{supplier_uri}  " + " ;\n                              ".join(supplier_props) + " ."
+
+    contract_props = [
+        'rdf:type            :SLAContract',
+        f':hasSupplier        :{supplier_uri}',
+        f':governsMaterial    :{material_uri}',
+        f':leadTimeDays       {lead_days}',
+        f':penaltyClause      "{raw_penalty}"',
+        f':hasOrderedQuantity "{contract.quantity}"^^xsd:integer',
+        f':hasUnitCost        "{contract.unit_cost}"^^xsd:float',
+        f':hasSLALeadTime     "{lead_days * 24}"^^xsd:integer'
+    ]
+    
+    if contract.delay_penalty_rate is not None:
+        contract_props.append(f':hasDelayPenaltyRate "{contract.delay_penalty_rate}"^^xsd:decimal')
+    if contract.missed_item_penalty_rate is not None:
+        contract_props.append(f':hasMissedItemPenaltyRate "{contract.missed_item_penalty_rate}"^^xsd:decimal')
+    if contract.min_quality_threshold is not None:
+        contract_props.append(f':hasMinimumQualityThreshold "{contract.min_quality_threshold}"^^xsd:decimal')
+    if contract.quality_penalty_rate is not None:
+        contract_props.append(f':hasQualityPenaltyRate "{contract.quality_penalty_rate}"^^xsd:decimal')
+
+    contract_triples_str = f"             :{contract_uri}  " + " ;\n                              ".join(contract_props) + " ."
 
     # ---- SPARQL UPDATE query ----
-    # We use a DELETE/INSERT/WHERE pattern to update the contracts
-    # Named Graph, avoiding duplicate triples for functional properties.
-    # All URIs use the ontology namespace (:) to satisfy Golden Rule #2 (Namespace Consistency).
     sparql_update = f"""
     {PREFIXES}
 
     DELETE {{
         GRAPH <{CONTRACT_GRAPH}> {{
             {old_process_delete}
+            :{supplier_uri} rdf:type :Supplier .
+            :{supplier_uri} rdf:type :AlternativeSupplier .
             :{supplier_uri} :hasReliabilityScore ?oldScore .
+            :{supplier_uri} :hasSLA ?oldSlaLink .
+            :{supplier_uri} :penaltyRatePerDay ?oldDelayRate .
             :{material_uri} :hasUnitCost ?oldUnitCost .
             :{material_uri} :hasOrderedQuantity ?oldQty .
             :{contract_uri} rdf:type :SLAContract ;
@@ -138,21 +191,21 @@ def create_contract_graph(contract: SLAContract) -> dict:
                             :leadTimeDays ?oldContractLead ;
                             :penaltyClause ?oldContractPenalty ;
                             :hasOrderedQuantity ?oldContractQty ;
-                            :hasUnitCost ?oldContractCost .
+                            :hasUnitCost ?oldContractCost ;
+                            :hasSLALeadTime ?oldSlaLead ;
+                            :hasDelayPenaltyRate ?oldDelayPenRate ;
+                            :hasMissedItemPenaltyRate ?oldMissedPenRate ;
+                            :hasMinimumQualityThreshold ?oldMinQual ;
+                            :hasQualityPenaltyRate ?oldQualPenRate .
         }}
     }}
     INSERT {{
         GRAPH <{CONTRACT_GRAPH}> {{
             # ── Supplier individual ──
-            :{supplier_uri}  rdf:type       :Supplier ;
-                             rdfs:label     "{safe_supplier_name}" ;
-                             :createdAt     "{timestamp}"^^xsd:dateTime .
+            {supplier_triples_str}
 
             # ── RawMaterial individual ──
-            :{material_uri}  rdf:type       :RawMaterial ;
-                             rdfs:label     "{safe_material}" ;
-                             :hasUnitCost   "{contract.unit_cost}"^^xsd:float ;
-                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer .{process_triple}
+            {material_triples_str}
 
             # ── Relationship: Supplier supplies RawMaterial ──
             :{supplier_uri}  :supplies      :{material_uri} .
@@ -161,19 +214,23 @@ def create_contract_graph(contract: SLAContract) -> dict:
             :{supplier_uri}  :hasReliabilityScore ?finalScore .
 
             # ── SLA Contract individual ──
-            :{contract_uri}  rdf:type            :SLAContract ;
-                             :hasSupplier        :{supplier_uri} ;
-                             :governsMaterial    :{material_uri} ;
-                             :leadTimeDays       {lead_days} ;
-                             :penaltyClause      "{raw_penalty}" ;
-                             :hasOrderedQuantity "{contract.quantity}"^^xsd:integer ;
-                             :hasUnitCost        "{contract.unit_cost}"^^xsd:float .
+            {contract_triples_str}
         }}
     }}
     WHERE {{
         OPTIONAL {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{supplier_uri} :hasReliabilityScore ?oldScore .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{supplier_uri} :hasSLA ?oldSlaLink .
+            }}
+        }}
+        OPTIONAL {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                :{supplier_uri} :penaltyRatePerDay ?oldDelayRate .
             }}
         }}
         OPTIONAL {{
@@ -185,7 +242,8 @@ def create_contract_graph(contract: SLAContract) -> dict:
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{material_uri} :hasOrderedQuantity ?oldQty .
             }}
-        }}{old_process_where}
+        }}
+        {old_process_where}
         OPTIONAL {{
             GRAPH <{CONTRACT_GRAPH}> {{
                 :{contract_uri} rdf:type :SLAContract ;
@@ -195,6 +253,11 @@ def create_contract_graph(contract: SLAContract) -> dict:
                 OPTIONAL {{ :{contract_uri} :penaltyClause ?oldContractPenalty . }}
                 OPTIONAL {{ :{contract_uri} :hasOrderedQuantity ?oldContractQty . }}
                 OPTIONAL {{ :{contract_uri} :hasUnitCost ?oldContractCost . }}
+                OPTIONAL {{ :{contract_uri} :hasSLALeadTime ?oldSlaLead . }}
+                OPTIONAL {{ :{contract_uri} :hasDelayPenaltyRate ?oldDelayPenRate . }}
+                OPTIONAL {{ :{contract_uri} :hasMissedItemPenaltyRate ?oldMissedPenRate . }}
+                OPTIONAL {{ :{contract_uri} :hasMinimumQualityThreshold ?oldMinQual . }}
+                OPTIONAL {{ :{contract_uri} :hasQualityPenaltyRate ?oldQualPenRate . }}
             }}
         }}
         BIND(COALESCE(?oldScore, "0.75"^^xsd:float) AS ?finalScore)
@@ -211,6 +274,96 @@ def create_contract_graph(contract: SLAContract) -> dict:
         "message": "Triples inserted successfully into GraphDB.",
     }
 
+
+
+def find_delayed_materials() -> list[dict]:
+    """
+    SPARQL SELECT that finds ALL materials with an active delayed delivery,
+    regardless of stock level or OWL-inferred ProductionDisruption.
+
+    Unlike find_impacted_products_by_supplier_delay(), this query does NOT
+    require ``?process rdf:type :ProductionDisruption``.  It is used to
+    surface an early-warning YELLOW state on the Inventory Risk page so that
+    the Procurement/Logistics team can request a proactive fallback supplier
+    *before* stock drops below the safety threshold.
+
+    The SUM of :hasOrderedQuantity across ALL delayed deliveries for a given
+    material is returned as ``reqQty``.  Each new IoT-triggered delay event
+    creates another delayed delivery, so this number grows with each event.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains supplierLabel, materialLabel, processLabel,
+        delayHours, reqQty, stock, and safetyStock.
+    """
+    sparql_query = f"""
+    {PREFIXES}
+    SELECT ?supplierLabel ?materialLabel ?processLabel ?delayHours ?reqQty ?stock ?safetyStock
+    WHERE {{
+        # 1. Fetch distinct delayed quantities and delay hours per material
+        {{
+            SELECT ?material (SUM(COALESCE(?poQty, 0)) AS ?reqQty) (MAX(?delayHrs) AS ?delayHours)
+            WHERE {{
+                # Unique delivery info
+                {{
+                    SELECT ?delivery ?material (MAX(xsd:double(?delayHoursVal)) AS ?delayHrs)
+                    WHERE {{
+                        ?delivery rdf:type :DeliveryEvent ;
+                                  :hasDeliveryStatus ?status ;
+                                  :transports ?material .
+                        FILTER(STR(?status) = "Delayed")
+                        OPTIONAL {{ ?delivery :hasDelayDuration ?delayHoursVal . }}
+                    }}
+                    GROUP BY ?delivery ?material
+                }}
+                # Unique PO quantities per delivery
+                OPTIONAL {{
+                    SELECT ?delivery (SUM(xsd:integer(?reqQtyVal)) AS ?poQty)
+                    WHERE {{
+                        ?delivery :fulfills ?po .
+                        ?po :hasOrderedQuantity ?reqQtyVal .
+                    }}
+                    GROUP BY ?delivery
+                }}
+            }}
+            GROUP BY ?material
+        }}
+
+        # 2. Fetch stock and safetyStock for the material
+        OPTIONAL {{ ?material :hasInventoryStock ?stock . }}
+        OPTIONAL {{ ?material :hasSafetyStockLevel ?safetyStock . }}
+
+        # 3. Resolve primary supplier label uniquely
+        OPTIONAL {{
+            SELECT DISTINCT ?material ?supplierLabel WHERE {{
+                {{ ?supplier :supplies ?material . }}
+                UNION
+                {{ ?material :isSuppliedBy ?supplier . }}
+                FILTER NOT EXISTS {{ ?supplier rdf:type :AlternativeSupplier . }}
+                OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
+                OPTIONAL {{ ?supplier :hasName ?sName . }}
+                BIND(COALESCE(?sLabel, ?sName, REPLACE(STR(?supplier), "^.*#", "")) AS ?supplierLabel)
+            }}
+        }}
+
+        # 4. Resolve material label
+        OPTIONAL {{ ?material rdfs:label ?mLabel . }}
+        BIND(COALESCE(?mLabel, REPLACE(STR(?material), "^.*#", "")) AS ?materialLabel)
+
+        # 5. Resolve process label (pick one if multiple exist)
+        OPTIONAL {{
+            SELECT ?material (MAX(?pLabelVal) AS ?processLabel) WHERE {{
+                ?material :affectsProcess ?process .
+                OPTIONAL {{ ?process rdfs:label ?pLabel . }}
+                BIND(COALESCE(?pLabel, REPLACE(STR(?process), "^.*#", "")) AS ?pLabelVal)
+            }}
+            GROUP BY ?material
+        }}
+    }}
+    ORDER BY ?materialLabel
+    """
+    return graphdb.execute_sparql_select(sparql_query)
 
 
 def find_impacted_products_by_supplier_delay() -> list[dict]:

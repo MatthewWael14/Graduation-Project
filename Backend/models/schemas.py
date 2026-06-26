@@ -56,13 +56,13 @@ class SLAContract(BaseModel):
         description="Penalty clause text for SLA violations",
     )
     quantity: int = Field(
-        default=0,
+        ...,
         ge=0,
         description="Standard order quantity or quantity covered under SLA",
         examples=[500],
     )
     unit_cost: float = Field(
-        default=0.0,
+        ...,
         ge=0.0,
         description="Unit cost of the material",
         examples=[12.50],
@@ -72,6 +72,33 @@ class SLAContract(BaseModel):
         examples=["EV_Battery_Assembly_Line"],
         description="Production process or assembly line impacted by this material",
     )
+    is_fallback: bool = Field(
+        default=False,
+        description="Whether this contract is for a backup/alternative supplier",
+    )
+    delay_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Daily delay penalty rate",
+    )
+    missed_item_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Penalty rate per missed/short-shipped item",
+    )
+    min_quality_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum acceptable quality threshold (decimal)",
+    )
+    quality_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Quality penalty rate as a decimal",
+    )
+
 
 
 
@@ -233,13 +260,13 @@ class ConfirmedSLA(BaseModel):
         description="Optional notes from the reviewer about what was corrected",
     )
     quantity: int = Field(
-        default=0,
+        ...,
         ge=0,
         description="Standard order quantity or quantity covered under SLA",
         examples=[500],
     )
     unit_cost: float = Field(
-        default=0.0,
+        ...,
         ge=0.0,
         description="Unit cost of the material",
         examples=[12.50],
@@ -249,6 +276,33 @@ class ConfirmedSLA(BaseModel):
         examples=["EV_Battery_Assembly_Line"],
         description="Production process or assembly line impacted by this material (human-verified)",
     )
+    is_fallback: bool = Field(
+        default=False,
+        description="Whether this contract is for a backup/alternative supplier (human-verified)",
+    )
+    delay_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Daily delay penalty rate",
+    )
+    missed_item_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Penalty rate per missed/short-shipped item",
+    )
+    min_quality_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum acceptable quality threshold (decimal)",
+    )
+    quality_penalty_rate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Quality penalty rate as a decimal",
+    )
+
 
 
 class RiskAnalysisResult(BaseModel):

@@ -76,6 +76,14 @@ export async function assignFallback(material, supplierName, assignmentType) {
   });
 }
 
+// POST /api/dashboard/request-fallback
+export async function requestFallbackSupplier(material, riskPercent) {
+  return safeFetch(`${BASE}/api/dashboard/request-fallback`, {
+    method: "POST",
+    body: JSON.stringify({ material, risk_percent: riskPercent }),
+  });
+}
+
 // GET /api/sandbox/impacted-products
 export async function fetchImpactedProducts() {
   const data = await safeFetch(`${BASE}/api/sandbox/impacted-products`);
@@ -148,10 +156,14 @@ export async function fetchAssemblyLines() {
 }
 
 // POST /api/dashboard/assign-material-process
-export async function assignMaterialToProcess(material, process, alertId = null) {
+export async function assignMaterialToProcess(material, process, alertId = null, safetyStock = null) {
+  const payload = { material, process, alert_id: alertId };
+  if (safetyStock !== null && safetyStock !== undefined && safetyStock !== "") {
+    payload.safety_stock = parseInt(safetyStock, 10);
+  }
   return safeFetch(`${BASE}/api/dashboard/assign-material-process`, {
     method: "POST",
-    body: JSON.stringify({ material, process, alert_id: alertId }),
+    body: JSON.stringify(payload),
   });
 }
 
