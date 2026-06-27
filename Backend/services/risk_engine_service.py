@@ -62,24 +62,108 @@ def graphdb_injector_node(state: RiskEngineState) -> RiskEngineState:
     """
     Node 1 — Permanent GraphDB Ingestor.
     Injects the incoming IoT telemetry delay event into GraphDB.
+
+    Creates a full DeliveryEvent individual with:
+      - rdf:type :DeliveryEvent  (required by find_delayed_materials())
+      - :hasDeliveryStatus "Delayed"
+      - :hasDelayDuration <hours>
+      - :transports <material>   (resolved from existing delivery URI)
+      - a linked PO with :hasOrderedQuantity  (drives Delayed Quantity column)
     """
     event = state["iot_event"]
     logger.info("[Node 1] Ingesting telemetry event into GraphDB for delivery %s ...", event.delivery_id)
 
     try:
         from knowledge_base.connection import graphdb
-        from knowledge_base.repository import _sanitize_uri_fragment
+        from knowledge_base.repository import _sanitize_uri_fragment, PREFIXES, CONTRACT_GRAPH
 
         delivery_uri = _sanitize_uri_fragment(event.delivery_id)
-        # Create a unique ID for the delay event
         risk_uri = f"Risk_ML_{delivery_uri}_{int(time.time())}"
 
-        # Insert telemetry predictions into contracts graph
+        # ── Step 1: look up what material the delivery transports ──────────────
+        # Try direct :transports first; if the delivery node was cleaned out by
+        # the seeding script, fall back to finding the material via the supplier
+        # (e.g. VoltSupply_Global :supplies :Lithium_Ion_Battery_Pack).
+        material_lookup = f"""
+        {PREFIXES}
+        SELECT ?material WHERE {{
+            {{
+                :{delivery_uri} :transports ?material .
+            }}
+            UNION
+            {{
+                # fallback: supplier linked to the delivery's own supplier node
+                :{delivery_uri} :isPerformedBy ?sup .
+                ?sup :supplies ?material .
+                FILTER NOT EXISTS {{ ?sup rdf:type :AlternativeSupplier . }}
+            }}
+        }} LIMIT 1
+        """
+        mat_rows = graphdb.execute_sparql_select(material_lookup)
+        material_uri = mat_rows[0].get("material") if mat_rows else None
+
+        # Last-resort fallback: look up by delivery URI name convention
+        # e.g. "Delivery_VoltSupply_Main" → supplier label contains "VoltSupply"
+        if not material_uri:
+            supplier_guess = delivery_uri.replace("Delivery_", "").split("_")[0]  # e.g. "VoltSupply"
+            guess_lookup = f"""
+            {PREFIXES}
+            SELECT ?material WHERE {{
+                ?sup rdf:type :Supplier ;
+                     :supplies ?material .
+                FILTER NOT EXISTS {{ ?sup rdf:type :AlternativeSupplier . }}
+                OPTIONAL {{ ?sup rdfs:label ?lbl . }}
+                FILTER(CONTAINS(LCASE(STR(COALESCE(?lbl, ?sup))), LCASE("{supplier_guess}")))
+            }} LIMIT 1
+            """
+            guess_rows = graphdb.execute_sparql_select(guess_lookup)
+            material_uri = guess_rows[0].get("material") if guess_rows else None
+
+        # Build the :transports triple (only when we could resolve the material)
+        transports_triple = ""
+        po_triples = ""
+        if material_uri:
+            transports_triple = f":{delivery_uri} :transports <{material_uri}> ."
+
+            # ── Step 2: create a PO with the ordered quantity so Delayed Quantity shows ─
+            if event.quantity and event.quantity > 0:
+                po_uri = f"PO_IoT_{delivery_uri}_{int(time.time())}"
+                po_triples = f"""
+                    :{po_uri} rdf:type :PurchaseOrder ;
+                              :hasOrderedQuantity {event.quantity} .
+                    :{delivery_uri} :fulfills :{po_uri} .
+                """
+
+        # ── Step 3: upsert the delivery status and insert the DelayEvent ────────
         insert_query = f"""
         PREFIX : <http://example.org/ontology#>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        # First delete any existing status triple so we can replace it cleanly
+        DELETE {{
+            GRAPH ?g {{ :{delivery_uri} :hasDeliveryStatus ?oldStatus . }}
+        }}
+        WHERE {{
+            GRAPH ?g {{ :{delivery_uri} :hasDeliveryStatus ?oldStatus . }}
+        }} ;
+
         INSERT DATA {{
-            GRAPH <http://example.org/contracts/> {{
+            GRAPH <{CONTRACT_GRAPH}> {{
+                # Ensure the delivery is typed as a DeliveryEvent (required for dashboard query)
+                :{delivery_uri} rdf:type :DeliveryEvent .
+
+                # Mark it delayed with the duration from the IoT signal
+                :{delivery_uri} :hasDeliveryStatus "Delayed"^^xsd:string ;
+                               :hasDelayDuration {event.estimated_delay_hours} .
+
+                # Material transport link (enables find_delayed_materials() lookup)
+                {transports_triple}
+
+                # PO + ordered quantity (drives Delayed Quantity column on dashboard)
+                {po_triples}
+
+                # DelayEvent risk record for the LLM agents
                 :{risk_uri} rdf:type :DelayEvent ;
                            :affectsDelivery :{delivery_uri} ;
                            :isTriggeredBy :{delivery_uri} ;
@@ -87,19 +171,27 @@ def graphdb_injector_node(state: RiskEngineState) -> RiskEngineState:
                            :hasReasonCode "{event.reason_code}"^^xsd:string ;
                            :hasRiskStatus "Predicted"^^xsd:string ;
                            :hasProbability {event.disruption_probability} .
-                :{delivery_uri} :hasDeliveryStatus "Delayed"^^xsd:string ;
-                               :hasDelayDuration {event.estimated_delay_hours} .
             }}
         }}
         """
         graphdb.execute_sparql_update(insert_query)
-        logger.info("    Successfully injected DelayEvent :%s into GraphDB.", risk_uri)
+        logger.info("    Successfully injected DelayEvent :%s into GraphDB (material=%s, qty=%s).",
+                    risk_uri, material_uri, event.quantity)
         state["injection_success"] = True
+
+        # Invalidate dashboard cache so the Inventory Risk card shows the new DELAYED status immediately
+        try:
+            from services.dashboard_service import invalidate_impacted_cache
+            invalidate_impacted_cache()
+        except Exception:
+            pass  # Non-critical — cache will expire on its own
+
     except Exception as exc:
         logger.warning("    GraphDB injection failed (%s). Continuing in offline/mock fallback mode.", exc)
         state["injection_success"] = False
 
     return state
+
 
 
 # ==============================================================
@@ -140,14 +232,17 @@ def query_context_node(state: RiskEngineState) -> RiskEngineState:
                 UNION
                 {{ ?supplier :supplies ?material . }}
 
-                # Get SLA terms on the supplier
+                # Get SLA terms — fetch the numeric delay penalty rate directly
+                # from the SLAContract (not the free-text :penaltyClause).
                 OPTIONAL {{ 
                     ?contract rdf:type :SLAContract ;
                               :hasSupplier ?supplier ;
                               :governsMaterial ?material ;
                               :leadTimeDays ?leadTimeDays .
+                    OPTIONAL {{ ?contract :hasDelayPenaltyRate ?contractPenalty . }}
                 }}
-                OPTIONAL {{ ?supplier :penaltyClause ?penaltyRate . }}
+                OPTIONAL {{ ?supplier :penaltyRatePerDay ?supplierPenalty . }}
+                BIND(COALESCE(?contractPenalty, ?supplierPenalty) AS ?penaltyRate)
             }}
 
             # Get inventory levels
@@ -190,19 +285,19 @@ def query_context_node(state: RiskEngineState) -> RiskEngineState:
         if results:
             risk_types = set()
             lead_time_days = 3
-            delay_penalty_rate = 500.0
+            delay_penalty_rate = 300.0  # VoltSupply Standard SLA: $300/day
             inventory_stock = 80
             safety_stock = 100
             disruption_level = "Medium"
 
             for row in results:
                 if "leadTimeDays" in row:
-                    lead_time_days = int(row["leadTimeDays"])
-                if "penaltyRate" in row:
-                    val = row["penaltyRate"].replace("$", "").split("/")[0].strip()
+                    lead_time_days = int(float(row["leadTimeDays"]))
+                if "penaltyRate" in row and row["penaltyRate"] is not None:
                     try:
-                        delay_penalty_rate = float(val)
-                    except ValueError:
+                        # penaltyRate is now always the numeric hasDelayPenaltyRate value
+                        delay_penalty_rate = float(row["penaltyRate"])
+                    except (ValueError, TypeError):
                         pass
                 if "stock" in row:
                     inventory_stock = int(row["stock"])
@@ -232,7 +327,7 @@ def query_context_node(state: RiskEngineState) -> RiskEngineState:
     state["ontology_risks"] = ["DelayEvent"]
     state["context_data"] = {
         "lead_time_days": 3,
-        "delay_penalty_rate": 500.0,
+        "delay_penalty_rate": 300.0,  # VoltSupply Standard SLA: $300/day
         "inventory_stock": 80,
         "safety_stock": 100,
         "disruption_level": "Medium",

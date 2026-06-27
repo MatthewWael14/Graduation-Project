@@ -409,6 +409,12 @@ class IoTTelemetryEvent(BaseModel):
         examples=["2026-03-05T15:30:00Z"],
         description="ISO 8601 timestamp of the telemetry event",
     )
+    quantity: int = Field(
+        default=0,
+        ge=0,
+        examples=[1000],
+        description="Number of units in this delivery shipment (used to populate Delayed Quantity on the dashboard)",
+    )
 
 
 class ManagerAlert(BaseModel):
