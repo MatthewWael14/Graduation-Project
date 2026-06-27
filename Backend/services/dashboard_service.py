@@ -1304,7 +1304,22 @@ def create_fallback_request_alert(material_name: str, risk_percent: int) -> dict
 
     alert_id = "FALLREQ_" + hashlib.md5(f"{material_clean}{risk_percent}{_time.time()}".encode()).hexdigest()[:8].upper()
     title = f"Urgent Fallback Supplier Request: {material_clean}"
-    desc = f"Production Manager Omar Nasser has requested urgent fallback supplier activation for material '{material_clean}' (safety stock buffer depleted by {risk_percent}%). Please assign a fallback supplier immediately."
+    # Build description based on whether this is a preemptive (YELLOW) or critical (RED) request
+    if risk_percent <= 50:
+        # YELLOW state: delivery delayed but stock is still above the safety threshold
+        desc = (
+            f"Production Manager Omar Nasser has requested proactive fallback supplier activation for material "
+            f"'{material_clean}'. An active delivery delay has been detected — current stock remains above the "
+            f"safety threshold but replenishment is at risk. Assigning a fallback supplier now will prevent "
+            f"a future production stoppage."
+        )
+    else:
+        # RED state: stock has actually dropped below the safety threshold
+        desc = (
+            f"Production Manager Omar Nasser has requested urgent fallback supplier activation for material "
+            f"'{material_clean}' (safety stock buffer depleted by {risk_percent}%). Stock has dropped below "
+            f"the safety threshold — immediate fallback assignment is required to prevent a production stoppage."
+        )
     created_at = datetime.utcnow().isoformat() + "Z"
 
     q = f"""
