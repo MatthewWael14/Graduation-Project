@@ -125,9 +125,20 @@ def graphdb_injector_node(state: RiskEngineState) -> RiskEngineState:
         if material_uri:
             transports_triple = f":{delivery_uri} :transports <{material_uri}> ."
 
-            # ── Step 2: create a PO with the ordered quantity so Delayed Quantity shows ─
+            # ── Step 2: upsert the IoT PO so re-posting doesn't accumulate quantity ─
+            # Use a FIXED URI (no timestamp) — same delivery always maps to the
+            # same PO, so INSERT DATA is idempotent (RDF set semantics).
             if event.quantity and event.quantity > 0:
-                po_uri = f"PO_IoT_{delivery_uri}_{int(time.time())}"
+                po_uri = f"PO_IoT_{delivery_uri}"  # deterministic, no timestamp
+
+                # Delete any previous quantity on this IoT PO before re-inserting
+                po_delete_q = f"""
+                {PREFIXES}
+                DELETE {{ GRAPH ?g {{ :{po_uri} :hasOrderedQuantity ?old . }} }}
+                WHERE  {{ GRAPH ?g {{ :{po_uri} :hasOrderedQuantity ?old . }} }}
+                """
+                graphdb.execute_sparql_update(po_delete_q)
+
                 po_triples = f"""
                     :{po_uri} rdf:type :PurchaseOrder ;
                               :hasOrderedQuantity {event.quantity} .
