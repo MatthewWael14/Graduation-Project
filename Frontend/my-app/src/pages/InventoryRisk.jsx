@@ -32,6 +32,56 @@ export default function InventoryRisk({ onNavigate, user }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const handleDownloadExcel = () => {
+    if (!products || products.length === 0) return;
+
+    // Filter keys present in the first product and in COLUMN_HEADERS to maintain column order
+    const keys = Object.keys(products[0]).filter(k => k in COLUMN_HEADERS);
+    const headers = keys.map(k => COLUMN_HEADERS[k]);
+
+    const csvRows = [headers.join(",")];
+
+    products.forEach(p => {
+      const values = keys.map(k => {
+        let val = p[k];
+        if (k === "status") {
+          const upper = String(val || "").toUpperCase();
+          if (upper === "RED") return "Critical Risk";
+          if (upper === "YELLOW") return "Warning (Delayed)";
+          if (upper === "GREEN") return "Healthy";
+          return val || "Unknown";
+        }
+        if (k === "reliabilityScore" && val !== null && val !== undefined) {
+          return `${(parseFloat(val) * 100).toFixed(0)}%`;
+        }
+        if (k === "leadTime" && val !== null && val !== undefined) {
+          return `${val}d`;
+        }
+        if (val === null || val === undefined) {
+          return "—";
+        }
+        // Clean values for CSV: escape double quotes, wrap in quotes if there are commas/newlines
+        let cell = String(val).replace(/"/g, '""');
+        if (cell.includes(",") || cell.includes("\n") || cell.includes('"')) {
+          cell = `"${cell}"`;
+        }
+        return cell;
+      });
+      csvRows.push(values.join(","));
+    });
+
+    const csvContent = "\uFEFF" + csvRows.join("\n"); // Include BOM for Excel UTF-8 support
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `inventory_risk_knowledge_graph_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div>
       <div style={S.pageHeader}>
@@ -104,8 +154,16 @@ export default function InventoryRisk({ onNavigate, user }) {
           {/* Detail table */}
           <div style={S.card}>
             <div style={S.cardHeader}>
-              <span style={S.cardTitle}>📊 Full Results from Knowledge Graph</span>
-              <span style={S.badge(C.green)}>{products.length} rows</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={S.cardTitle}>📊 Full Results from Knowledge Graph</span>
+                <span style={S.badge(C.green)}>{products.length} rows</span>
+              </div>
+              <button
+                style={S.btn("secondary")}
+                onClick={handleDownloadExcel}
+              >
+                📥 Download Excel
+              </button>
             </div>
             <table style={S.table}>
               <thead>
@@ -129,6 +187,19 @@ export default function InventoryRisk({ onNavigate, user }) {
                         } else if (k === "leadTime" && val !== null) {
                           val = `${val}d`;
                         }
+
+                        if (k === "status") {
+                          const isRed = val === "RED";
+                          const isYellow = val === "YELLOW";
+                          const badgeText = isRed ? "Critical Risk" : isYellow ? "Warning (Delayed)" : "Healthy";
+                          const color = isRed ? C.red : isYellow ? C.orange : C.green;
+                          return (
+                            <td key={k} style={{ ...S.td, fontSize: 13 }}>
+                              <span style={S.badge(color)}>{badgeText}</span>
+                            </td>
+                          );
+                        }
+
                         return (
                           <td key={k} style={{ ...S.td, fontSize: 13 }}>{String(val ?? "—")}</td>
                         );

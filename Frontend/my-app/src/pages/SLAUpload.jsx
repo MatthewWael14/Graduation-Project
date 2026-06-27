@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C, S } from "../styles/theme";
-import { uploadSLAPdf, confirmSLA, matchAssemblyLine } from "../services/api";
+import { uploadSLAPdf, confirmSLA, matchAssemblyLine, fetchActiveSLA } from "../services/api";
 
 // ── Field must be defined OUTSIDE the parent component so React
 // does not remount it on every keystroke (which caused typing to break)
@@ -40,6 +40,13 @@ export default function SLAUpload({ user }) {
   const [formErrors,   setFormErrors]   = useState({});
   const [pipelineStep, setPipelineStep] = useState(0);
   const [assemblyMatch, setAssemblyMatch] = useState(null); // { matched, process } | null
+  const [fileName,     setFileName]     = useState("");
+  const [fileSize,     setFileSize]     = useState("");
+  const [copied,       setCopied]       = useState(false);
+  const [fileObject,   setFileObject]   = useState(null);
+  const [fileUrl,      setFileUrl]      = useState("");
+  const [existingSLA,  setExistingSLA]  = useState(null);
+  const [checkingSLA,  setCheckingSLA]  = useState(false);
 
   useEffect(() => {
     const materialName = editedFields.material;
@@ -66,9 +73,61 @@ export default function SLAUpload({ user }) {
     return () => clearTimeout(delayDebounceFn);
   }, [editedFields.material, step]);
 
+  useEffect(() => {
+    if (!fileObject) {
+      setFileUrl("");
+      return;
+    }
+    const url = URL.createObjectURL(fileObject);
+    setFileUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [fileObject]);
+
+  useEffect(() => {
+    const supplier = editedFields.supplier_name;
+    const material = editedFields.material;
+    if (!supplier || !material || step !== "review") {
+      setExistingSLA(null);
+      return;
+    }
+
+    setCheckingSLA(true);
+    setExistingSLA(null);
+
+    const delayDebounceFn = setTimeout(() => {
+      fetchActiveSLA(supplier, material)
+        .then(res => {
+          if (editedFields.supplier_name === supplier && editedFields.material === material) {
+            if (res.exists) {
+              setExistingSLA(res.sla);
+            } else {
+              setExistingSLA(null);
+            }
+            setCheckingSLA(false);
+          }
+        })
+        .catch(() => {
+          if (editedFields.supplier_name === supplier && editedFields.material === material) {
+            setExistingSLA(null);
+            setCheckingSLA(false);
+          }
+        });
+    }, 400);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [editedFields.supplier_name, editedFields.material, step]);
+
   const handleFile = async (file) => {
     if (!file) return;
     setStep("extracting"); setError(""); setFormErrors({}); setExtraction(null); setConfirmed(null); setPipelineStep(0);
+    setFileName(file.name);
+    const size = file.size > 1024 * 1024 
+      ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` 
+      : `${(file.size / 1024).toFixed(1)} KB`;
+    setFileSize(size);
+    setFileObject(file);
 
     // Animate pipeline steps while uploading
     const stepTimer = setInterval(() => {
@@ -171,6 +230,10 @@ export default function SLAUpload({ user }) {
   const reset = () => {
     setStep("idle"); setExtraction(null); setConfirmed(null);
     setError(""); setEditedFields({}); setPipelineStep(0); setAssemblyMatch(null);
+    setFileName(""); setFileSize(""); setCopied(false);
+    setFileObject(null);
+    setExistingSLA(null);
+    setCheckingSLA(false);
   };
 
   return (
@@ -179,6 +242,146 @@ export default function SLAUpload({ user }) {
         <div style={S.pageTitle}>SLA Upload · LLM Parser</div>
         <div style={S.pageDesc}>Upload a PDF contract — AI extracts entities · Review · Save to Knowledge Graph</div>
       </div>
+
+      {/* Processing Pipeline - Horizontal Stepper at the top */}
+      {step !== "idle" && step !== "error" && (
+        <div style={{ ...S.card, marginBottom: 18 }}>
+          <div style={{ ...S.cardTitle, marginBottom: 14 }}>⚙ Processing Pipeline</div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            {pipelineSteps.map((s, i) => (
+              <div key={i} style={{
+                display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 180,
+                padding: "10px 14px", background: i <= pipelineStep ? C.surface2 : "transparent",
+                border: `1px solid ${i <= pipelineStep ? C.borderHi : C.border}44`, borderRadius: 8
+              }}>
+                <div style={{
+                  width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 10, fontWeight: 700,
+                  background: i < pipelineStep ? C.green : i === pipelineStep && step === "extracting" ? C.accent : i <= pipelineStep ? C.green : C.border,
+                  color: i <= pipelineStep ? "#000" : C.muted,
+                }}>
+                  {i < pipelineStep || (i === pipelineStep && step !== "extracting" && step !== "idle" && step !== "error") ? "✓" : i === pipelineStep && step === "extracting" ? <span className="spin" style={{ fontSize: 9 }}>⚙</span> : i + 1}
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 600, color: i <= pipelineStep ? C.text : C.muted }}>{s}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Step: review — show raw numbers and virtual twin comparison side-by-side above the form/doc grid */}
+      {(step === "review" || step === "confirming") && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 18, marginBottom: 18 }}>
+          {/* Raw values */}
+          {extraction?.extracted_data && (
+            <div style={S.card}>
+              <div style={{ ...S.cardTitle, marginBottom: 14 }}>📋 Raw Extracted Values</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  ["Lead Time", `${extraction.extracted_data.sla_lead_time_hours}h`],
+                  ["Delay Penalty", `$${extraction.extracted_data.delay_penalty_rate}/day`],
+                  ["Quality Threshold", `${(extraction.extracted_data.minimum_quality_threshold * 100).toFixed(0)}%`],
+                  ["Quality Penalty", `${(extraction.extracted_data.quality_penalty_rate * 100).toFixed(0)}%`],
+                  ["Quantity", `${extraction.extracted_data.quantity || 0}`],
+                  ["Unit Cost", `$${extraction.extracted_data.unit_cost || 0.0}`],
+                ].map(([k, v], i) => (
+                  <div key={i} style={{ fontSize: 12, display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${C.border}22`, paddingBottom: 6 }}>
+                    <span style={{ color: C.muted }}>{k}</span>
+                    <span style={{ color: C.accent, fontWeight: 600 }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Virtual Twin comparison */}
+          <div style={S.card}>
+            {existingSLA ? (
+              <div>
+                <div style={{ fontSize: 13, color: C.blue, fontWeight: 700, marginBottom: 8, letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 5 }}>
+                  🌐 VIRTUAL TWIN MATCH FOUND
+                </div>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+                  Comparing proposed contract against active SLA in the Knowledge Graph:
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <th style={{ textAlign: "left", paddingBottom: 6, color: C.muted }}>Metric</th>
+                      <th style={{ textAlign: "right", paddingBottom: 6, color: C.accent }}>Proposed</th>
+                      <th style={{ textAlign: "right", paddingBottom: 6, color: C.text }}>Active Twin</th>
+                      <th style={{ textAlign: "right", paddingBottom: 6, color: C.muted }}>Diff</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ["Lead Time", `${editedFields.lead_time_days || "—"}d`, `${existingSLA.lead_time_days || "—"}d`, 
+                       (editedFields.lead_time_days && existingSLA.lead_time_days) ? (parseInt(editedFields.lead_time_days) - existingSLA.lead_time_days) : null, "d"],
+                      ["Quantity", editedFields.quantity || "—", existingSLA.quantity || "—", 
+                       (editedFields.quantity && existingSLA.quantity) ? (parseInt(editedFields.quantity) - existingSLA.quantity) : null, ""],
+                      ["Unit Cost", `$${editedFields.unit_cost || "—"}`, `$${existingSLA.unit_cost || "—"}`, 
+                       (editedFields.unit_cost && existingSLA.unit_cost) ? (parseFloat(editedFields.unit_cost) - existingSLA.unit_cost) : null, "$", true],
+                      ["Delay Penalty", `$${editedFields.delay_penalty_rate || "—"}/d`, `$${existingSLA.delay_penalty_rate || "—"}/d`, 
+                       (editedFields.delay_penalty_rate && existingSLA.delay_penalty_rate) ? (parseFloat(editedFields.delay_penalty_rate) - existingSLA.delay_penalty_rate) : null, "$"],
+                      ["Missed Item Penalty", `$${editedFields.missed_item_penalty_rate || "—"}/unit`, `$${existingSLA.missed_item_penalty_rate || "—"}/unit`, 
+                       (editedFields.missed_item_penalty_rate && existingSLA.missed_item_penalty_rate) ? (parseFloat(editedFields.missed_item_penalty_rate) - existingSLA.missed_item_penalty_rate) : null, "$"],
+                      ["Min Quality Threshold", 
+                       editedFields.min_quality_threshold !== undefined && editedFields.min_quality_threshold !== "" ? `${(parseFloat(editedFields.min_quality_threshold) * 100).toFixed(0)}%` : "—", 
+                       existingSLA.min_quality_threshold !== null && existingSLA.min_quality_threshold !== undefined ? `${(existingSLA.min_quality_threshold * 100).toFixed(0)}%` : "—", 
+                       (editedFields.min_quality_threshold && existingSLA.min_quality_threshold) ? (parseFloat(editedFields.min_quality_threshold) - existingSLA.min_quality_threshold) : null, "%", false, true],
+                      ["Quality Penalty Rate", 
+                       editedFields.quality_penalty_rate !== undefined && editedFields.quality_penalty_rate !== "" ? `${(parseFloat(editedFields.quality_penalty_rate) * 100).toFixed(0)}%` : "—", 
+                       existingSLA.quality_penalty_rate !== null && existingSLA.quality_penalty_rate !== undefined ? `${(existingSLA.quality_penalty_rate * 100).toFixed(0)}%` : "—", 
+                       (editedFields.quality_penalty_rate && existingSLA.quality_penalty_rate) ? (parseFloat(editedFields.quality_penalty_rate) - existingSLA.quality_penalty_rate) : null, "%", false, true],
+                    ].map(([label, propVal, twinVal, diff, unit, isCurrency, isPercent], idx) => {
+                      const hasDiff = diff !== null && diff !== 0;
+                      const diffColor = diff > 0 ? C.red : diff < 0 ? C.green : C.muted;
+                      const diffSign = diff > 0 ? "+" : "";
+                      let diffText = "—";
+                      if (hasDiff) {
+                        if (isCurrency) {
+                          diffText = `${diffSign}$${diff.toFixed(2)}`;
+                        } else if (isPercent) {
+                          diffText = `${diffSign}${(diff * 100).toFixed(0)}%`;
+                        } else {
+                          diffText = `${diffSign}${diff.toFixed(0)}${unit}`;
+                        }
+                      } else if (diff === 0) {
+                        diffText = "No change";
+                      }
+                      return (
+                        <tr key={idx} style={{ borderBottom: `1px solid ${C.border}22` }}>
+                          <td style={{ padding: "5px 0", color: C.textSoft, fontWeight: 500 }}>{label}</td>
+                          <td style={{ padding: "5px 0", textAlign: "right", color: C.accent, fontWeight: 600 }}>{propVal}</td>
+                          <td style={{ padding: "5px 0", textAlign: "right", color: C.textSoft }}>{twinVal}</td>
+                          <td style={{ padding: "5px 0", textAlign: "right", color: diffColor, fontWeight: 600 }}>
+                            {diffText}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : checkingSLA ? (
+              <div style={{ padding: "10px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, color: C.muted }}>
+                ⏳ Checking active Digital Twin state for {editedFields.supplier_name || "supplier"}...
+              </div>
+            ) : (
+              (editedFields.supplier_name && editedFields.material) ? (
+                <div style={{ padding: "10px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, color: C.muted }}>
+                  🌐 Virtual Twin: No active contract found for this Supplier/Material pair. (Will be saved as new node).
+                </div>
+              ) : (
+                <div style={{ padding: "10px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, color: C.muted }}>
+                  🌐 Enter Supplier & Material to compare against active Digital Twin state.
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={S.grid2}>
         {/* Left: Upload flow */}
@@ -213,27 +416,6 @@ export default function SLAUpload({ user }) {
             </div>
           )}
 
-          {/* Step: extracting / review / confirming / done — show pipeline */}
-          {step !== "idle" && step !== "error" && (
-            <div style={{ ...S.card, marginBottom: 16 }}>
-              <div style={{ ...S.cardTitle, marginBottom: 14 }}>⚙ Processing Pipeline</div>
-              {pipelineSteps.map((s, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}22` }}>
-                  <div style={{
-                    width: 24, height: 24, borderRadius: "50%", flexShrink: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 11, fontWeight: 700,
-                    background: i < pipelineStep ? C.green : i === pipelineStep && step === "extracting" ? C.accent : i <= pipelineStep ? C.green : C.border,
-                    color: i <= pipelineStep ? "#000" : C.muted,
-                  }}>
-                    {i < pipelineStep ? "✓" : i === pipelineStep && step === "extracting" ? <span className="spin" style={{ fontSize: 10 }}>⚙</span> : i + 1}
-                  </div>
-                  <span style={{ fontSize: 14, color: i <= pipelineStep ? C.text : C.muted }}>{s}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* Step: review — show editable extracted fields */}
           {(step === "review" || step === "confirming") && (
             <div style={{ ...S.card, borderLeft: `3px solid ${C.blue}` }}>
@@ -241,28 +423,6 @@ export default function SLAUpload({ user }) {
               <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
                 Review and correct before saving to Knowledge Graph
               </div>
-
-              {/* Raw numbers */}
-              {extraction?.extracted_data && (
-                <div style={{ marginBottom: 16, padding: "10px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>RAW EXTRACTED VALUES</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                    {[
-                      ["Lead Time", `${extraction.extracted_data.sla_lead_time_hours}h`],
-                      ["Delay Penalty", `$${extraction.extracted_data.delay_penalty_rate}/day`],
-                      ["Quality Threshold", `${(extraction.extracted_data.minimum_quality_threshold * 100).toFixed(0)}%`],
-                      ["Quality Penalty", `${(extraction.extracted_data.quality_penalty_rate * 100).toFixed(0)}%`],
-                      ["Quantity", `${extraction.extracted_data.quantity || 0}`],
-                      ["Unit Cost", `$${extraction.extracted_data.unit_cost || 0.0}`],
-                    ].map(([k, v], i) => (
-                      <div key={i} style={{ fontSize: 12, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: C.muted }}>{k}</span>
-                        <span style={{ color: C.accent, fontWeight: 600 }}>{v}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               <Field label="Supplier Name"   field="supplier_name"  editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.supplier_name} />
               <Field label="Material"         field="material"       editedFields={editedFields} setEditedFields={setEditedFields} error={formErrors.material} />
@@ -371,30 +531,154 @@ export default function SLAUpload({ user }) {
           )}
         </div>
 
-        {/* Right: How it works panel */}
-        <div style={S.card}>
-          <div style={{ ...S.cardTitle, marginBottom: 16 }}>ℹ How It Works</div>
-          {[
-            { step: "1", title: "Upload PDF", desc: "Drop your SLA contract PDF. The LLM reads the document and extracts key terms automatically." },
-            { step: "2", title: "Review Extraction", desc: "Check the extracted supplier name, material, lead time, and penalty clause. Correct any errors." },
-            { step: "3", title: "Confirm & Save", desc: "Once confirmed, the data is converted to RDF triples and stored in the Knowledge Graph for reasoning." },
-          ].map((item, i) => (
-            <div key={i} style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.accent + "22", border: `2px solid ${C.accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
-                {item.step}
+        {/* Right Panel: How it works or Document Viewer */}
+        {step === "idle" || step === "error" ? (
+          <div style={S.card}>
+            <div style={{ ...S.cardTitle, marginBottom: 16 }}>ℹ How It Works</div>
+            {[
+              { step: "1", title: "Upload PDF, TXT, or DOC", desc: "Drop your SLA contract file. The LLM reads the document and extracts key terms automatically." },
+              { step: "2", title: "Review Extraction", desc: "Check the extracted supplier name, material, lead time, and penalty clause. Correct any errors." },
+              { step: "3", title: "Confirm & Save", desc: "Once confirmed, the data is converted to RDF triples and stored in the Knowledge Graph for reasoning." },
+            ].map((item, i) => (
+              <div key={i} style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.accent + "22", border: `2px solid ${C.accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+                  {item.step}
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>{item.title}</div>
+                  <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{item.desc}</div>
+                </div>
               </div>
+            ))}
+
+            <div style={{ padding: "12px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, fontWeight: 600 }}>SUPPORTED FORMATS</div>
+              <div style={{ fontSize: 13, color: C.text }}>PDF · TXT · DOC · DOCX · English language contracts only</div>
+            </div>
+          </div>
+        ) : step === "extracting" ? (
+          <div style={{ ...S.card, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 400, textAlign: "center" }}>
+            <div className="spin" style={{ fontSize: 32, marginBottom: 16, color: C.accent }}>⚙</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 8 }}>Reading Document</div>
+            <div style={{ fontSize: 14, color: C.muted, maxWidth: 300, marginBottom: 6 }}>
+              Extracting raw text from <span style={{ color: C.text, fontWeight: 600 }}>{fileName}</span> ({fileSize})
+            </div>
+            <div style={{ fontSize: 12, color: C.muted + "AA" }}>
+              Please wait while the AI processes the document structure...
+            </div>
+          </div>
+        ) : (
+          <div style={S.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottom: `1px solid ${C.border}`, paddingBottom: 12 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>{item.title}</div>
-                <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{item.desc}</div>
+                <div style={{ ...S.cardTitle, marginBottom: 4 }}>📄 Original SLA Document</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 10 }}>
+                  {fileName}
+                  {!fileName.toLowerCase().endsWith(".pdf") && fileUrl && (
+                    <a
+                      href={fileUrl}
+                      download={fileName}
+                      title="Download original file to view formatting in Word"
+                      style={{
+                        background: C.surface,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 4,
+                        color: C.accent,
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        cursor: "pointer",
+                        textDecoration: "none",
+                        fontWeight: 600,
+                        transition: "all 0.15s",
+                      }}
+                      onMouseEnter={e => { e.target.style.borderColor = C.accent; }}
+                      onMouseLeave={e => { e.target.style.borderColor = C.border; }}
+                    >
+                      📥 Download Original
+                    </a>
+                  )}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <span style={{ ...S.badge(C.accent), fontSize: 11 }}>{fileSize}</span>
               </div>
             </div>
-          ))}
 
-          <div style={{ padding: "12px 14px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, marginTop: 8 }}>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, fontWeight: 600 }}>SUPPORTED FORMATS</div>
-            <div style={{ fontSize: 13, color: C.text }}>PDF · TXT · DOC · DOCX · English language contracts only</div>
+            {fileName.toLowerCase().endsWith(".pdf") && fileUrl ? (
+              <div style={{ position: "relative", background: "#ffffff", borderRadius: 8, border: `1px solid ${C.border}`, padding: 4 }}>
+                <iframe
+                  src={fileUrl}
+                  title="SLA Document Viewer"
+                  style={{
+                    width: "100%",
+                    height: "550px",
+                    border: "none",
+                    borderRadius: 4,
+                    background: "#ffffff",
+                  }}
+                />
+              </div>
+            ) : (
+              <div style={{ position: "relative" }}>
+                <div
+                  style={{
+                    margin: 0,
+                    padding: "24px 32px",
+                    background: "#ffffff",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    maxHeight: 520,
+                    overflowY: "auto",
+                    color: "#1f2937",
+                    fontFamily: "Georgia, Cambria, 'Times New Roman', Times, serif",
+                    fontSize: "14px",
+                    lineHeight: "1.7",
+                    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05), inset 0 2px 4px rgba(0,0,0,0.03)",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {extraction?.raw_text || "No text extracted from document."}
+                </div>
+
+                {extraction?.raw_text && (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(extraction.raw_text);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 10,
+                      right: 10,
+                      background: copied ? C.green + "22" : "rgba(255,255,255,0.9)",
+                      border: `1px solid ${copied ? C.green : "#cbd5e1"}`,
+                      borderRadius: 4,
+                      color: copied ? C.green : "#4b5563",
+                      fontSize: 11,
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {copied ? "✓ Copied" : "📋 Copy"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, fontSize: 12, color: C.muted }}>
+              <div>
+                Character count: <span style={{ color: C.text, fontWeight: 600 }}>{extraction?.raw_text?.length || 0}</span>
+              </div>
+              <div>
+                Word count: <span style={{ color: C.text, fontWeight: 600 }}>{extraction?.raw_text ? extraction.raw_text.split(/\s+/).filter(Boolean).length : 0}</span>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

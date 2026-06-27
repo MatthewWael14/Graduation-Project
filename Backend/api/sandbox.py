@@ -259,6 +259,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         "extraction_id": state.get("document_id", ""),
         "extracted_data": extracted_data.model_dump(),
         "mapped_sla": mapped.model_dump(),
+        "raw_text": raw_text,
     }
 
 

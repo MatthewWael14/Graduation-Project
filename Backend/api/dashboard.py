@@ -21,6 +21,7 @@ from services.dashboard_service import (
     assign_material_to_process,
     update_alert_status,
     create_fallback_request_alert,
+    get_active_sla,
 )
 from services.chat_service import run_chat_pipeline_async
 from pydantic import BaseModel
@@ -81,6 +82,19 @@ async def handle_fallback_options(material_id: str):
         }
     except Exception as exc:
         logger.error("Failed to fetch fallback options: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.get("/active-sla")
+async def handle_active_sla(supplier: str, material: str):
+    try:
+        result = get_active_sla(supplier, material)
+        return {
+            "status": "success",
+            "exists": result is not None,
+            "sla": result
+        }
+    except Exception as exc:
+        logger.error("Failed to fetch active SLA: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 @router.post("/assign-fallback")

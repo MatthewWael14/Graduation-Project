@@ -1342,3 +1342,80 @@ def create_fallback_request_alert(material_name: str, risk_percent: int) -> dict
     logger.info("Created fallback request alert %s with severity %s for material %s", alert_id, severity, material_clean)
     return {"status": "success", "alert_id": alert_id, "severity": severity, "risk_percent": risk_percent}
 
+
+def get_active_sla(supplier_name: str, material_name: str) -> dict | None:
+    """Query GraphDB for an existing active SLAContract for this supplier and material."""
+    supplier_escaped = supplier_name.replace('"', '\\"')
+    material_escaped = material_name.replace('"', '\\"')
+    
+    query = f"""
+    {PREFIXES}
+    SELECT ?leadTimeDays ?quantity ?unitCost ?penaltyClause ?delayPenaltyRate ?missedItemPenaltyRate ?minQualityThreshold ?qualityPenaltyRate
+    WHERE {{
+        # Find supplier
+        ?supplier rdf:type :Supplier .
+        OPTIONAL {{ ?supplier rdfs:label ?sLabel . }}
+        OPTIONAL {{ ?supplier :hasName ?sName . }}
+        FILTER(
+            STR(?sLabel) = "{supplier_escaped}" || STR(?sName) = "{supplier_escaped}"
+        )
+        
+        # Find material
+        ?material rdf:type :RawMaterial .
+        OPTIONAL {{ ?material rdfs:label ?mLabel . }}
+        FILTER(
+            STR(?mLabel) = "{material_escaped}"
+        )
+        
+        # Find active contract
+        ?contract rdf:type :SLAContract ;
+                  :hasSupplier ?supplier ;
+                  :governsMaterial ?material .
+                  
+        OPTIONAL {{ ?contract :leadTimeDays ?leadTimeDays . }}
+        OPTIONAL {{ ?contract :hasOrderedQuantity ?quantity . }}
+        OPTIONAL {{ ?contract :hasUnitCost ?unitCost . }}
+        OPTIONAL {{ ?contract :penaltyClause ?penaltyClause . }}
+        OPTIONAL {{ ?contract :hasDelayPenaltyRate ?delayPenaltyRate . }}
+        OPTIONAL {{ ?contract :hasMissedItemPenaltyRate ?missedItemPenaltyRate . }}
+        OPTIONAL {{ ?contract :hasMinimumQualityThreshold ?minQualityThreshold . }}
+        OPTIONAL {{ ?contract :hasQualityPenaltyRate ?qualityPenaltyRate . }}
+    }}
+    LIMIT 1
+    """
+    try:
+        results = graphdb.execute_sparql_select(query)
+        if results and len(results) > 0:
+            row = results[0]
+            
+            def _to_float(val):
+                if val is None:
+                    return None
+                try:
+                    return float(val)
+                except ValueError:
+                    return None
+                    
+            def _to_int(val):
+                if val is None:
+                    return None
+                try:
+                    return int(float(val))
+                except ValueError:
+                    return None
+
+            return {
+                "lead_time_days": _to_int(row.get("leadTimeDays")),
+                "quantity": _to_int(row.get("quantity")),
+                "unit_cost": _to_float(row.get("unitCost")),
+                "penalty_clause": row.get("penaltyClause", ""),
+                "delay_penalty_rate": _to_float(row.get("delayPenaltyRate")),
+                "missed_item_penalty_rate": _to_float(row.get("missedItemPenaltyRate")),
+                "min_quality_threshold": _to_float(row.get("minQualityThreshold")),
+                "quality_penalty_rate": _to_float(row.get("qualityPenaltyRate")),
+            }
+    except Exception as exc:
+        logger.error("get_active_sla failed: %s", exc)
+    return None
+
+

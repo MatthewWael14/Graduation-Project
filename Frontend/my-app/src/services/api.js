@@ -150,6 +150,11 @@ export async function matchAssemblyLine(material) {
   return safeFetch(`${BASE}/api/sandbox/match-assembly-line?material=${encodeURIComponent(material)}`);
 }
 
+// GET /api/dashboard/active-sla?supplier=<name>&material=<name>
+export async function fetchActiveSLA(supplier, material) {
+  return safeFetch(`${BASE}/api/dashboard/active-sla?supplier=${encodeURIComponent(supplier)}&material=${encodeURIComponent(material)}`);
+}
+
 // GET /api/dashboard/assembly-lines
 export async function fetchAssemblyLines() {
   return safeFetch(`${BASE}/api/dashboard/assembly-lines`);
