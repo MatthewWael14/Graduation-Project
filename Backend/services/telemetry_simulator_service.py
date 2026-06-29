@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 TELEMETRY_STREAM_PATH = Path(
     os.getenv(
         "TELEMETRY_STREAM_PATH",
-        str(Path(__file__).resolve().parent.parent.parent / "Data_Science" / "data_Lake" / "telemetry_stream_logistics.json"),
+        str(Path(__file__).resolve().parent.parent.parent / "Data_Science" / "data_Lake" / "iot_streams" / "telemetry_stream_logistics.json"),
     )
 )
 

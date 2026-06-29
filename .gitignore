@@ -29,3 +29,6 @@ ENV/
 *.xlsx
 *.pkl
 .ipynb_checkpoints/
+
+# Local Dev Scratch directories
+scratch/

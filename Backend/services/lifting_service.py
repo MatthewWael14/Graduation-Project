@@ -194,12 +194,12 @@ class SemanticLifter:
         str
             A complete SPARQL INSERT DATA query ready to execute.
         """
-        supplier_name_clean = (data.supplier_name or "").strip().replace(" ", "_")
-        material_clean = (data.material or "").strip().replace(" ", "_")
+        supplier_name_val = (data.supplier_name or "").strip()
+        material_val = (data.material or "").strip()
 
         document_uri = _build_contract_id(data.document_id)
-        supplier_uri = _build_supplier_uri(data.supplier_id, supplier_name_clean)
-        material_uri = _build_material_uri(material_clean)
+        supplier_uri = _build_supplier_uri(data.supplier_id, supplier_name_val.replace(" ", "_"))
+        material_uri = _build_material_uri(material_val.replace(" ", "_"))
 
         lead_days = self._hours_to_days(data.sla_lead_time_hours)
 
@@ -216,12 +216,12 @@ INSERT DATA {{
 
         # ── Supplier ──
         :{supplier_uri}  rdf:type       :Supplier ;
-                         rdfs:label     "{_escape_sparql_literal(supplier_name_clean)}" ;
+                         rdfs:label     "{_escape_sparql_literal(supplier_name_val)}" ;
                          :hasReliabilityScore  "0.75"^^xsd:float .
 
         # ── Raw Material ──
         :{material_uri}  rdf:type       :RawMaterial ;
-                          rdfs:label     "{_escape_sparql_literal(material_clean)}" .
+                          rdfs:label     "{_escape_sparql_literal(material_val)}" .
 
         # ── Supplier supplies Material ──
         :{supplier_uri}  :supplies      :{material_uri} .

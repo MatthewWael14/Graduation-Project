@@ -144,7 +144,7 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="../Data_Science/data_Lake/telemetry_stream_logistics.json",
+        default="../Data_Science/data_Lake/iot_streams/telemetry_stream_logistics.json",
         help="Output JSON file path.",
     )
     args = parser.parse_args()
